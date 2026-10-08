@@ -1,6 +1,17 @@
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL;
 
-async function sendMessageToAI(message) {
+interface AIServiceResult {
+  status: number;
+  data: unknown;
+}
+
+export async function sendMessageToAI(
+  message: string
+): Promise<AIServiceResult> {
+  if (!AI_SERVICE_URL) {
+    throw new Error("AI_SERVICE_URL is not configured");
+  }
+
   const controller = new AbortController();
 
   const timeout = setTimeout(() => {
@@ -19,14 +30,14 @@ async function sendMessageToAI(message) {
       signal: controller.signal,
     });
 
-    const data = await response.json();
+    const data: unknown = await response.json();
 
     return {
       status: response.status,
       data,
     };
   } catch (error) {
-    if (error.name === "AbortError") {
+    if (error instanceof Error && error.name === "AbortError") {
       throw new Error("AI Service request timed out");
     }
 
@@ -35,7 +46,3 @@ async function sendMessageToAI(message) {
     clearTimeout(timeout);
   }
 }
-
-module.exports = {
-  sendMessageToAI,
-};

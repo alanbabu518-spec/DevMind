@@ -1,10 +1,7 @@
-const express = require("express");
-const dotenv = require("dotenv");
+import "dotenv/config";
 
-
-dotenv.config();
-
-const aiRoutes = require("./routes/aiRoutes");
+import express from "express";
+import aiRoutes from "./routes/aiRoutes.js";
 
 const app = express();
 
@@ -12,7 +9,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
 
-app.get("/", (req, res) => {
+app.get("/", (_req, res) => {
   res.json({
     service: "DevMind API Gateway",
     status: "running",
