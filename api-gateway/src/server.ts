@@ -1,8 +1,11 @@
+
 import "dotenv/config";
 
 import express from "express";
 import aiRoutes from "./routes/aiRoutes.js";
 import databaseRoutes from "./routes/databaseRoutes";
+import { connectRedis } from "./lib/redis";
+import authRoutes from "./modules/authentication/auth.routes";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 5000;
@@ -27,6 +30,7 @@ app.get("/", (_req, res) => {
 
 app.use("/api/ai", aiRoutes);
 app.use("/", databaseRoutes);
+app.use("/api/auth", authRoutes);
 
 app.get("/ready", async (_req, res) => {
   const aiServiceUrl = process.env.AI_SERVICE_URL;
@@ -79,13 +83,22 @@ app.get("/ready", async (_req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(
-    JSON.stringify({
-      level: "info",
-      message: "API Gateway started",
-      port: PORT,
-      environment: process.env.NODE_ENV || "development",
-    }),
-  );
+async function startServer(): Promise<void> {
+  await connectRedis();
+
+  app.listen(PORT, () => {
+    console.log(
+      JSON.stringify({
+        level: "info",
+        message: "API Gateway started",
+        port: PORT,
+        environment: process.env.NODE_ENV || "development",
+      }),
+    );
+  });
+}
+
+startServer().catch((error: unknown) => {
+  console.error("Failed to start API Gateway:", error);
+  process.exitCode = 1;
 });

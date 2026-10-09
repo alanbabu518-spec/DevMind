@@ -9,10 +9,7 @@ interface ChatRequestBody {
 
 router.post(
   "/chat",
-  async (
-    req: Request<{}, {}, ChatRequestBody>,
-    res: Response
-  ) => {
+  async (req: Request<{}, {}, ChatRequestBody>, res: Response) => {
     try {
       const { message } = req.body;
 
@@ -32,19 +29,15 @@ router.post(
           level: "error",
           service: "DevMind API Gateway",
           message: "AI chat request failed",
-          error:
-            error instanceof Error
-              ? error.message
-              : "Unknown error",
-        })
+          error: error instanceof Error ? error.message : "Unknown error",
+        }),
       );
 
       res.status(502).json({
         error: "AI service is currently unavailable",
       });
     }
-
-  }
+  },
 );
 
 export default router;
