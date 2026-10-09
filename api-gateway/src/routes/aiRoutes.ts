@@ -27,17 +27,23 @@ router.post(
 
       res.status(result.status).json(result.data);
     } catch (error) {
-      console.error("AI Service Error:", error);
+      console.error(
+        JSON.stringify({
+          level: "error",
+          service: "DevMind API Gateway",
+          message: "AI chat request failed",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unknown error",
+        })
+      );
 
-      const message =
-        error instanceof Error
-          ? error.message
-          : "AI Service is unavailable";
-
-      res.status(500).json({
-        error: message,
+      res.status(502).json({
+        error: "AI service is currently unavailable",
       });
     }
+
   }
 );
 
