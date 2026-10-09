@@ -1,7 +1,7 @@
-
 import "dotenv/config";
 
 import express from "express";
+import cookieParser from "cookie-parser";
 import aiRoutes from "./routes/aiRoutes.js";
 import databaseRoutes from "./routes/databaseRoutes";
 import { connectRedis } from "./lib/redis";
@@ -11,6 +11,7 @@ const app = express();
 const PORT = Number(process.env.PORT) || 5000;
 
 app.use(express.json());
+app.use(cookieParser());
 
 app.get("/health", (_req, res) => {
   res.status(200).json({
