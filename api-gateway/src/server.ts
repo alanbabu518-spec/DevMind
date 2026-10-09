@@ -2,6 +2,7 @@ import "dotenv/config";
 
 import express from "express";
 import aiRoutes from "./routes/aiRoutes.js";
+import databaseRoutes from "./routes/databaseRoutes";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 5000;
@@ -25,6 +26,7 @@ app.get("/", (_req, res) => {
 });
 
 app.use("/api/ai", aiRoutes);
+app.use("/", databaseRoutes);
 
 app.get("/ready", async (_req, res) => {
   const aiServiceUrl = process.env.AI_SERVICE_URL;
