@@ -4,18 +4,22 @@ import {
   createMagicLinkToken,
   consumeMagicLinkToken,
 } from "./magic-link.service";
+import { sendMagicLinkEmail } from "../../lib/email";
 
 export async function requestMagicLink(
   input: RequestMagicLinkInput,
 ): Promise<void> {
-  const { token, expiresAt } = await createMagicLinkToken(input.email);
+  const frontendUrl = process.env.FRONTEND_URL;
 
-  const magicLink = `http://localhost:5173/verify-email?token=${token}`;
-
-  if (process.env.NODE_ENV !== "production") {
-    console.log("Development magic link:", magicLink);
-    console.log("Magic link expires at:", expiresAt.toISOString());
+  if (!frontendUrl) {
+    throw new Error("FRONTEND_URL is not configured");
   }
+
+  const { token } = await createMagicLinkToken(input.email);
+
+  const magicLink = `${frontendUrl.replace(/\/$/, "")}/verify-email?token=${encodeURIComponent(token)}`;
+
+  await sendMagicLinkEmail(input.email, magicLink);
 }
 
 export async function verifyMagicLink(token: string) {
