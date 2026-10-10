@@ -39,6 +39,19 @@ services:
       retries: 10
       start_period: 10s
 
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6381:6379"
+    volumes:
+      - devmind_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   api-gateway:
     build:
       context: ./api-gateway
@@ -48,6 +61,7 @@ services:
       NODE_ENV: development
       AI_SERVICE_URL: http://ai-service:8000
       DATABASE_URL: "postgresql://devmind_user:devmind_local_password@postgres:5432/devmind?schema=public"
+      REDIS_URL: redis://redis:6379
     ports:
       - "5001:5000"
     depends_on:
@@ -68,3 +82,4 @@ services:
 
 volumes:
   devmind_postgres_data:
+  devmind_redis_data:

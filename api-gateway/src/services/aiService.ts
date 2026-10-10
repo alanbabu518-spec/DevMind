@@ -6,7 +6,7 @@ interface AIServiceResult {
 }
 
 export async function sendMessageToAI(
-  message: string
+  message: string,
 ): Promise<AIServiceResult> {
   if (!AI_SERVICE_URL) {
     throw new Error("AI_SERVICE_URL is not configured");
