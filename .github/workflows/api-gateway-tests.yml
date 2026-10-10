@@ -37,3 +37,5 @@ jobs:
 
       - name: Build TypeScript
         run: npm run build
+
+        
