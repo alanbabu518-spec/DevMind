@@ -4,9 +4,9 @@ import {
   requestMagicLink as requestMagicLinkService,
   verifyMagicLink as verifyMagicLinkService,
 } from "./auth.service";
-import { createSession } from "./session.service";
+
+import { createSession, deleteSession } from "./session.service";
 import { prisma } from "../../lib/prisma";
-import { deleteSession } from "./session.service";
 
 const SESSION_COOKIE_NAME = "devmind_session";
 const SESSION_COOKIE_MAX_AGE = 7 * 24 * 60 * 60 * 1000;

@@ -22,6 +22,15 @@ export async function requestMagicLink(
   await sendMagicLinkEmail(input.email, magicLink);
 }
 
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "P2002"
+  );
+}
+
 export async function verifyMagicLink(token: string) {
   const email = await consumeMagicLinkToken(token);
 
@@ -51,19 +60,49 @@ export async function verifyMagicLink(token: string) {
     };
   }
 
-  const user = await prisma.user.create({
-    data: {
-      email,
-      emailVerified: new Date(),
-    },
-  });
+  try {
+    const user = await prisma.user.create({
+      data: {
+        email,
+        emailVerified: new Date(),
+      },
+    });
 
-  return {
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-    },
-    isNewUser: true,
-  };
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+      },
+      isNewUser: true,
+    };
+  } catch (error: unknown) {
+    if (!isUniqueConstraintError(error)) {
+      throw error;
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (!user) {
+      throw error;
+    }
+
+    const verifiedUser = user.emailVerified
+      ? user
+      : await prisma.user.update({
+          where: { id: user.id },
+          data: { emailVerified: new Date() },
+        });
+
+    return {
+      user: {
+        id: verifiedUser.id,
+        email: verifiedUser.email,
+        name: verifiedUser.name,
+      },
+      isNewUser: false,
+    };
+  }
 }

@@ -190,5 +190,61 @@ describe("Authentication service", () => {
         isNewUser: false,
       });
     });
+
+    it("handles a concurrent account creation conflict", async () => {
+      consumeMagicLinkToken.mockResolvedValue("race@example.com");
+
+      findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce({
+        id: "user-3",
+        email: "race@example.com",
+        name: "Developer",
+        emailVerified: new Date(),
+      });
+
+      const conflict = Object.assign(new Error("Unique constraint failed"), {
+        code: "P2002",
+      });
+
+      createUser.mockRejectedValue(conflict);
+
+      const result = await verifyMagicLink("valid-token");
+
+      expect(createUser).toHaveBeenCalledTimes(1);
+      expect(findUnique).toHaveBeenCalledTimes(2);
+
+      expect(result).toEqual({
+        user: {
+          id: "user-3",
+          email: "race@example.com",
+          name: "Developer",
+        },
+        isNewUser: false,
+      });
+    });
+
+    it("rethrows a unique conflict if the competing user cannot be found", async () => {
+      consumeMagicLinkToken.mockResolvedValue("race@example.com");
+      findUnique.mockResolvedValue(null);
+
+      const conflict = Object.assign(new Error("Unique constraint failed"), {
+        code: "P2002",
+      });
+
+      createUser.mockRejectedValue(conflict);
+
+      await expect(verifyMagicLink("valid-token")).rejects.toBe(conflict);
+
+      expect(findUnique).toHaveBeenCalledTimes(2);
+    });
+
+    it("propagates unexpected account creation errors", async () => {
+      consumeMagicLinkToken.mockResolvedValue("new@example.com");
+      findUnique.mockResolvedValue(null);
+
+      const databaseError = new Error("Database unavailable");
+      createUser.mockRejectedValue(databaseError);
+
+      await expect(verifyMagicLink("valid-token")).rejects.toBe(databaseError);
+    });
   });
 });

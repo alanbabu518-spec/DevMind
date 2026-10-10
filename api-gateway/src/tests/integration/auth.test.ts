@@ -147,6 +147,38 @@ describe("Authentication API", () => {
       expect(cookie).toContain("Path=/");
       expect(cookie).not.toContain("Secure");
     });
+
+    it("sets the Secure cookie attribute in production", async () => {
+      process.env.NODE_ENV = "production";
+
+      verifyMagicLinkService.mockResolvedValue({
+        user: {
+          id: "user-1",
+          email: "developer@example.com",
+          name: "Developer",
+        },
+        isNewUser: false,
+      });
+
+      createSession.mockResolvedValue({
+        token: "test-session-token",
+        expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      });
+
+      const response = await request(app).get(
+        "/api/auth/verify-magic-link?token=valid-token",
+      );
+
+      expect(response.status).toBe(200);
+
+      const cookie = response.headers["set-cookie"]?.[0];
+
+      expect(cookie).toContain("devmind_session=test-session-token");
+      expect(cookie).toContain("HttpOnly");
+      expect(cookie).toContain("Secure");
+      expect(cookie).toContain("SameSite=Lax");
+      expect(cookie).toContain("Path=/");
+    });
   });
 
   describe("GET /api/auth/me", () => {
