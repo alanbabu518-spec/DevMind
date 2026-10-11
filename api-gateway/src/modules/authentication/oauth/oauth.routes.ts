@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { Router, type RequestHandler } from "express";
 import passport from "passport";
 import { createSession } from "../session.service";
@@ -10,12 +11,27 @@ import {
 const router = Router();
 
 const SESSION_EXPIRY_SECONDS = 7 * 24 * 60 * 60;
+const STATE_EXPIRY_MS = 10 * 60 * 1000;
+
+function getStateCookieName(provider: OAuthProvider): string {
+  return `devmind_oauth_state_${provider}`;
+}
+
+function getStateCookieOptions(provider: OAuthProvider) {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax" as const,
+    path: `/api/auth/oauth/${provider}/callback`,
+    maxAge: STATE_EXPIRY_MS,
+  };
+}
 
 function frontendRedirect(
   status: "success" | "error",
   provider: OAuthProvider,
 ): string {
-  const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+  const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5174";
 
   const url = new URL("/", frontendUrl);
   url.searchParams.set("oauth", status);
@@ -26,8 +42,38 @@ function frontendRedirect(
 
 function validateOAuthState(provider: OAuthProvider): RequestHandler {
   return async (req, res, next) => {
+    const cookieName = getStateCookieName(provider);
+    const cookieOptions = getStateCookieOptions(provider);
+    const cookieState = req.cookies?.[cookieName];
+    const queryState = req.query.state;
+
     try {
-      const valid = await consumeOAuthState(req.query.state, provider);
+      if (
+        typeof cookieState !== "string" ||
+        typeof queryState !== "string" ||
+        !/^[a-f0-9]{64}$/.test(cookieState) ||
+        !/^[a-f0-9]{64}$/.test(queryState)
+      ) {
+        res.clearCookie(cookieName, cookieOptions);
+        res.redirect(frontendRedirect("error", provider));
+        return;
+      }
+
+      const cookieBuffer = Buffer.from(cookieState, "hex");
+      const queryBuffer = Buffer.from(queryState, "hex");
+
+      if (
+        cookieBuffer.length !== queryBuffer.length ||
+        !timingSafeEqual(cookieBuffer, queryBuffer)
+      ) {
+        res.clearCookie(cookieName, cookieOptions);
+        res.redirect(frontendRedirect("error", provider));
+        return;
+      }
+
+      res.clearCookie(cookieName, cookieOptions);
+
+      const valid = await consumeOAuthState(queryState, provider);
 
       if (!valid) {
         res.redirect(frontendRedirect("error", provider));
@@ -45,14 +91,14 @@ function startOAuth(provider: OAuthProvider): RequestHandler {
   return async (req, res, next) => {
     try {
       const state = await createOAuthState(provider);
-      const strategy = provider === "google" ? "google" : "github";
+      const cookieName = getStateCookieName(provider);
 
-      const authenticate = passport.authenticate(strategy, {
+      res.cookie(cookieName, state, getStateCookieOptions(provider));
+
+      const authenticate = passport.authenticate(provider, {
         session: false,
         state,
-        ...(provider === "google"
-          ? { scope: ["profile", "email"] }
-          : { scope: ["user:email"] }),
+        scope: provider === "google" ? ["profile", "email"] : ["user:email"],
       });
 
       authenticate(req, res, next);
@@ -66,13 +112,12 @@ const completeOAuthLogin: RequestHandler = async (req, res, next) => {
   try {
     const user = req.user as { id: string } | undefined;
 
+    const provider: OAuthProvider = req.path.includes("google")
+      ? "google"
+      : "github";
+
     if (!user?.id) {
-      res.redirect(
-        frontendRedirect(
-          "error",
-          req.path.includes("google") ? "google" : "github",
-        ),
-      );
+      res.redirect(frontendRedirect("error", provider));
       return;
     }
 
@@ -85,10 +130,6 @@ const completeOAuthLogin: RequestHandler = async (req, res, next) => {
       path: "/",
       maxAge: SESSION_EXPIRY_SECONDS * 1000,
     });
-
-    const provider: OAuthProvider = req.path.includes("google")
-      ? "google"
-      : "github";
 
     res.redirect(frontendRedirect("success", provider));
   } catch (error) {

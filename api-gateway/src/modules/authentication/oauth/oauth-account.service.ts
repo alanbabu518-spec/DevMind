@@ -9,20 +9,24 @@ interface OAuthAccountInput {
   name: string | null;
 }
 
-export async function findOrCreateOAuthUser(
-  input: OAuthAccountInput,
-): Promise<{ id: string }> {
-  const email = input.email.trim().toLowerCase();
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "P2002"
+  );
+}
 
-  if (!email || !input.providerAccountId) {
-    throw new Error("OAuth provider did not return required account details");
-  }
-
-  const existingAccount = await prisma.account.findUnique({
+async function findExistingAccount(
+  provider: OAuthProvider,
+  providerAccountId: string,
+): Promise<{ id: string } | null> {
+  const account = await prisma.account.findUnique({
     where: {
       provider_providerAccountId: {
-        provider: input.provider,
-        providerAccountId: input.providerAccountId,
+        provider,
+        providerAccountId,
       },
     },
     select: {
@@ -32,64 +36,91 @@ export async function findOrCreateOAuthUser(
     },
   });
 
-  if (existingAccount) {
-    return existingAccount.user;
+  return account?.user ?? null;
+}
+
+export async function findOrCreateOAuthUser(
+  input: OAuthAccountInput,
+): Promise<{ id: string }> {
+  const email = input.email.trim().toLowerCase();
+
+  if (!email || !input.providerAccountId) {
+    throw new Error("OAuth provider did not return required account details");
   }
 
-  const existingUser = await prisma.user.findUnique({
-    where: { email },
-    select: {
-      id: true,
-      name: true,
-      emailVerified: true,
-    },
-  });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const existingAccount = await findExistingAccount(
+      input.provider,
+      input.providerAccountId,
+    );
 
-  return prisma.$transaction(async (tx) => {
-    const account = await tx.account.findUnique({
-      where: {
-        provider_providerAccountId: {
-          provider: input.provider,
-          providerAccountId: input.providerAccountId,
-        },
-      },
-      select: {
-        user: {
-          select: { id: true },
-        },
-      },
-    });
-
-    if (account) {
-      return account.user;
+    if (existingAccount) {
+      return existingAccount;
     }
 
-    const user = existingUser
-      ? await tx.user.update({
-          where: { id: existingUser.id },
-          data: {
-            emailVerified: existingUser.emailVerified ?? new Date(),
-            name: existingUser.name ?? input.name,
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const account = await tx.account.findUnique({
+          where: {
+            provider_providerAccountId: {
+              provider: input.provider,
+              providerAccountId: input.providerAccountId,
+            },
           },
-          select: { id: true },
-        })
-      : await tx.user.create({
-          data: {
-            email,
-            name: input.name,
-            emailVerified: new Date(),
+          select: {
+            user: {
+              select: { id: true },
+            },
           },
-          select: { id: true },
         });
 
-    await tx.account.create({
-      data: {
-        provider: input.provider,
-        providerAccountId: input.providerAccountId,
-        userId: user.id,
-      },
-    });
+        if (account) {
+          return account.user;
+        }
 
-    return user;
-  });
+        const existingUser = await tx.user.findUnique({
+          where: { email },
+          select: {
+            id: true,
+            name: true,
+            emailVerified: true,
+          },
+        });
+
+        const user = existingUser
+          ? await tx.user.update({
+              where: { id: existingUser.id },
+              data: {
+                emailVerified: existingUser.emailVerified ?? new Date(),
+                name: existingUser.name ?? input.name,
+              },
+              select: { id: true },
+            })
+          : await tx.user.create({
+              data: {
+                email,
+                name: input.name,
+                emailVerified: new Date(),
+              },
+              select: { id: true },
+            });
+
+        await tx.account.create({
+          data: {
+            provider: input.provider,
+            providerAccountId: input.providerAccountId,
+            userId: user.id,
+          },
+        });
+
+        return user;
+      });
+    } catch (error) {
+      if (!isUniqueConstraintError(error) || attempt === 2) {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error("Unable to complete OAuth account linking");
 }

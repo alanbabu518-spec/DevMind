@@ -10,14 +10,20 @@ import {
 import type { VerifyCallback } from "passport-oauth2";
 import { findOrCreateOAuthUser } from "./oauth-account.service";
 
-async function getGoogleVerifiedEmail(
+export async function getGoogleVerifiedEmail(
   profile: GoogleProfile,
 ): Promise<string | null> {
-  if (profile._json.email_verified !== true) {
+  const email = profile._json.email;
+
+  if (
+    profile._json.email_verified !== true ||
+    typeof email !== "string" ||
+    !email.trim()
+  ) {
     return null;
   }
 
-  return profile.emails?.[0]?.value ?? null;
+  return email.trim().toLowerCase();
 }
 
 async function getGitHubVerifiedEmail(
