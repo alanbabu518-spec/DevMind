@@ -3,15 +3,14 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
-  
-"scripts": {
-  "build": "tsc",
-  "start": "node dist/server.js",
-  "dev": "tsc --watch",
-  "test": "vitest run src/tests",
-  "test:watch": "vitest src/tests",
-  "postinstall": "prisma skills sync || exit 0"
-},
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsc --watch",
+    "test": "vitest run src/tests",
+    "test:watch": "vitest src/tests",
+    "postinstall": "prisma skills sync || exit 0"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -22,6 +21,9 @@
     "cookie-parser": "^1.4.7",
     "dotenv": "^18.0.6",
     "express": "^5.2.1",
+    "passport": "^0.7.0",
+    "passport-github2": "^0.1.12",
+    "passport-google-oauth20": "^2.0.0",
     "pg": "^8.23.1",
     "redis": "^6.3.0",
     "resend": "^6.32.1",
@@ -31,6 +33,9 @@
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.4",
+    "@types/passport": "^1.0.17",
+    "@types/passport-github2": "^1.2.9",
+    "@types/passport-google-oauth20": "^2.0.17",
     "@types/supertest": "^7.2.1",
     "prisma": "^7.10.0",
     "supertest": "^7.3.1",

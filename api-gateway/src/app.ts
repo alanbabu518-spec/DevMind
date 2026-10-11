@@ -3,11 +3,13 @@ import cookieParser from "cookie-parser";
 import aiRoutes from "./routes/aiRoutes.js";
 import databaseRoutes from "./routes/databaseRoutes";
 import authRoutes from "./modules/authentication/auth.routes";
+import passport from "passport";
 
 const app = express();
 
 app.use(express.json());
 app.use(cookieParser());
+app.use(passport.initialize());
 
 app.get("/health", (_req, res) => {
   res.status(200).json({
