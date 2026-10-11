@@ -2,6 +2,9 @@ import "dotenv/config";
 
 import app from "./app";
 import { connectRedis } from "./lib/redis";
+import { configureOAuthStrategies } from "./modules/authentication/oauth/oauth.strategy";
+
+configureOAuthStrategies();
 
 const PORT = Number(process.env.PORT) || 5000;
 
