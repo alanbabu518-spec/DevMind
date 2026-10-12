@@ -1,9 +1,10 @@
 import express from "express";
 import cookieParser from "cookie-parser";
-import aiRoutes from "./modules/ai/routes/aiRoutes";
+import aiRoutes from "./modules/ai/aiRoutes";
 import databaseRoutes from "./routes/databaseRoutes";
 import authRoutes from "./modules/authentication/auth.routes";
 import passport from "passport";
+import projectRoutes from "./modules/projects/project.routes";
 
 const app = express();
 
@@ -30,6 +31,7 @@ app.get("/", (_req, res) => {
 app.use("/api/ai", aiRoutes);
 app.use("/", databaseRoutes);
 app.use("/api/auth", authRoutes);
+app.use("/api/projects", projectRoutes);
 
 app.get("/ready", async (_req, res) => {
   const aiServiceUrl = process.env.AI_SERVICE_URL;
