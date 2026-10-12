@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - feat/magic-link-auth
+      - feat/project-management-api
   pull_request:
     branches:
       - main
@@ -13,6 +14,20 @@ jobs:
   test:
     name: Test API Gateway
     runs-on: ubuntu-latest
+
+    env:
+      REDIS_URL: redis://localhost:6379
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     defaults:
       run:
@@ -37,5 +52,3 @@ jobs:
 
       - name: Build TypeScript
         run: npm run build
-
-        
