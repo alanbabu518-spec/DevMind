@@ -4,10 +4,24 @@ import sys
 import tempfile
 from pathlib import Path
 
+
+def get_severity(rule: str) -> str:
+    """Map Ruff rule prefixes to a presentation severity."""
+
+    if rule.startswith(("E", "F")):
+        return "error"
+
+    if rule.startswith(("W", "B", "S")):
+        return "warning"
+
+    if rule.startswith(("I", "UP", "SIM", "C4", "N")):
+        return "info"
+
+    return "warning"
+
+
 def analyze_python_code(source_code: str) -> list[dict]:
-    """
-    Analyze Python source code using Ruff without executing the submitted code.
-    """
+    """Analyze Python source code using Ruff without executing it."""
 
     with tempfile.TemporaryDirectory() as temporary_directory:
         source_path = Path(temporary_directory) / "submitted.py"
@@ -45,15 +59,19 @@ def analyze_python_code(source_code: str) -> list[dict]:
     findings = []
 
     for item in raw_findings:
+        rule = item.get("code", "UNKNOWN")
+        location = item.get("location") or {}
+        end_location = item.get("end_location") or {}
+
         findings.append(
             {
-                "rule": item.get("code", "UNKNOWN"),
-                "severity": "warning",
+                "rule": rule,
+                "severity": get_severity(rule),
                 "message": item.get("message", "No message provided"),
-                "line": item.get("location", {}).get("row"),
-                "column": item.get("location", {}).get("column"),
-                "end_line": item.get("end_location", {}).get("row"),
-                "end_column": item.get("end_location", {}).get("column"),
+                "line": location.get("row"),
+                "column": location.get("column"),
+                "end_line": end_location.get("row"),
+                "end_column": end_location.get("column"),
             }
         )
 
