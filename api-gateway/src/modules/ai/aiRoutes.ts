@@ -1,5 +1,5 @@
 import express, { Request, Response } from "express";
-import { analyzeCodeWithAI, sendMessageToAI } from "../services/aiService.js";
+import { analyzeCodeWithAI, sendMessageToAI } from "./aiService.js";
 
 const router = express.Router();
 
