@@ -1,6 +1,6 @@
 import express from "express";
 import cookieParser from "cookie-parser";
-import aiRoutes from "./routes/aiRoutes.js";
+import aiRoutes from "./modules/ai/routes/aiRoutes";
 import databaseRoutes from "./routes/databaseRoutes";
 import authRoutes from "./modules/authentication/auth.routes";
 import passport from "passport";
