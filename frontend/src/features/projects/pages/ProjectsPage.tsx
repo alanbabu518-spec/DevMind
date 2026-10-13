@@ -183,7 +183,7 @@ export default function ProjectsPage() {
         onClose={() => setSidebarOpen(false)}
       />
 
-      <div className="min-h-screen lg:pl-[260px]">
+      <div className="min-h-screen lg:pl-65">
         <DashboardHeader onMenuClick={() => setSidebarOpen(true)} />
 
         <main className="mx-auto max-w-[1600px] px-4 py-7 sm:px-6 sm:py-9 lg:px-8">
@@ -223,7 +223,7 @@ export default function ProjectsPage() {
             </button>
           </section>
 
-          <section className="mt-8 rounded-2xl border border-white/[0.08] bg-[#101110] p-4 sm:p-5">
+          <section className="mt-8 rounded-2xl border border-white/8 bg-[#101110] p-4 sm:p-5">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-sm font-medium text-white">
@@ -254,7 +254,7 @@ export default function ProjectsPage() {
                   disabled={loading}
                   aria-label="Refresh projects"
                   title="Refresh projects"
-                  className="rounded-xl border border-white/10 px-3 text-neutral-400 transition-colors hover:bg-white/[0.05] hover:text-white disabled:opacity-50"
+                  className="rounded-xl border border-white/10 px-3 text-neutral-400 transition-colors hover:bg-white/5 hover:text-white disabled:opacity-50"
                 >
                   <RefreshCw
                     size={17}
@@ -268,7 +268,7 @@ export default function ProjectsPage() {
           {error && !modalOpen && (
             <div
               role="alert"
-              className="mt-5 flex flex-col gap-3 rounded-xl border border-red-500/20 bg-red-500/[0.06] p-4 text-sm text-red-300 sm:flex-row sm:items-center sm:justify-between"
+              className="mt-5 flex flex-col gap-3 rounded-xl border border-red-500/20 bg-red-500/6 p-4 text-sm text-red-300 sm:flex-row sm:items-center sm:justify-between"
             >
               <p>{error}</p>
               <button
@@ -304,7 +304,7 @@ export default function ProjectsPage() {
               ))}
             </section>
           ) : (
-            <section className="mt-6 flex min-h-72 flex-col items-center justify-center rounded-2xl border border-dashed border-white/[0.12] bg-white/[0.015] px-6 py-12 text-center">
+            <section className="mt-6 flex min-h-72 flex-col items-center justify-center rounded-2xl border border-dashed border-white/12 bg-white/15 px-6 py-12 text-center">
               <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-[#76B900]/20 bg-[#76B900]/10">
                 <FolderKanban size={26} className="text-[#76B900]" />
               </div>
@@ -332,7 +332,7 @@ export default function ProjectsPage() {
             </section>
           )}
 
-          <footer className="mt-10 border-t border-white/[0.06] py-5 text-center text-xs text-neutral-600">
+          <footer className="mt-10 border-t border-white/6 py-5 text-center text-xs text-neutral-600">
             DevMind · Project workspace
           </footer>
         </main>
@@ -340,7 +340,7 @@ export default function ProjectsPage() {
 
       {modalOpen && (
         <div
-          className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-black/75 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-70 flex items-center justify-center overflow-y-auto bg-black/75 p-4 backdrop-blur-sm"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) closeModal();
           }}
@@ -441,7 +441,7 @@ export default function ProjectsPage() {
                   type="button"
                   disabled={saving}
                   onClick={closeModal}
-                  className="rounded-xl border border-white/10 px-4 py-3 text-sm text-neutral-300 hover:bg-white/[0.04] disabled:opacity-50"
+                  className="rounded-xl border border-white/10 px-4 py-3 text-sm text-neutral-300 hover:bg-white/4 disabled:opacity-50"
                 >
                   Cancel
                 </button>
@@ -467,7 +467,7 @@ export default function ProjectsPage() {
       )}
 
       {selectedProject && (
-        <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 z-65 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
           <section
             role="dialog"
             aria-modal="true"
@@ -530,7 +530,7 @@ export default function ProjectsPage() {
                   setSelectedProject(null);
                   openEditModal(project);
                 }}
-                className="rounded-xl border border-white/10 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/[0.04]"
+                className="rounded-xl border border-white/10 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/4"
               >
                 Edit project
               </button>
