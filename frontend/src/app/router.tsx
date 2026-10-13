@@ -1,3 +1,4 @@
+
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
 import LandingPage from "../features/landing/pages/LandingPage";
@@ -12,12 +13,24 @@ export function AppRouter() {
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/devmind" element={<LandingPage />} />
-        <Route path="/devmind/login" element={<LoginPage />} />
-        <Route path="/devmind/onboarding" element={<OnboardingPage />} />
-        <Route path="/devmind/dashboard" element={<DashboardPage />} />
-        <Route path="/devmind/projects" element={<ProjectsPage />} />
-        
-        <Route path="*" element={<Navigate to="/" replace />} />
+
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/onboarding" element={<OnboardingPage />} />
+
+        <Route
+          path="/dashboard"
+          element={<DashboardPage />}
+        />
+
+        <Route
+          path="/projects"
+          element={<ProjectsPage />}
+        />
+
+        <Route
+          path="*"
+          element={<Navigate to="/" replace />}
+        />
       </Routes>
     </BrowserRouter>
   );

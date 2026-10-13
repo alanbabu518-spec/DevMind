@@ -17,6 +17,29 @@ vi.mock("../../modules/authentication/auth.routes", async () => {
   };
 });
 
+// Mock Redis so the health tests do not require a Redis connection.
+vi.mock("../../lib/redis", () => ({
+  redis: {
+    isOpen: false,
+    on: vi.fn(),
+    connect: vi.fn(),
+  },
+  connectRedis: vi.fn(),
+}));
+
+// Mock Prisma so the health tests do not require DATABASE_URL or PostgreSQL.
+vi.mock("../../lib/prisma", () => ({
+  prisma: {
+    project: {
+      create: vi.fn(),
+      findMany: vi.fn(),
+      findFirst: vi.fn(),
+      updateMany: vi.fn(),
+      deleteMany: vi.fn(),
+    },
+  },
+}));
+
 import app from "../../app";
 
 describe("Health API", () => {
