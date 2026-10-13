@@ -1,5 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
+
 import { useReducedMotion, motion } from "motion/react";
+
 import GravityStars from "../../../shared/components/ui/gravity-stars";
 
 const GREEN = "#76B900";
@@ -10,10 +12,15 @@ export default function AuthenticationPage() {
   const reducedMotion = useReducedMotion();
 
   const [step, setStep] = useState<AuthStep>("options");
+
   const [email, setEmail] = useState("");
+
   const [loading, setLoading] = useState(false);
+
   const [error, setError] = useState("");
+
   const [message, setMessage] = useState("");
+
   const [resendCooldown, setResendCooldown] = useState(0);
 
   useEffect(() => {
@@ -34,16 +41,20 @@ export default function AuthenticationPage() {
     event?.preventDefault();
 
     if (loading) return;
+
     if (step === "sent" && resendCooldown > 0) return;
 
     setError("");
+
     setMessage("");
 
     const normalizedEmail = email.trim().toLowerCase();
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       setError("Please enter a valid email address.");
+
       setStep("options");
+
       return;
     }
 
@@ -52,10 +63,13 @@ export default function AuthenticationPage() {
     try {
       const response = await fetch("/api/auth/magic-link", {
         method: "POST",
+
         headers: {
           "Content-Type": "application/json",
         },
+
         credentials: "include",
+
         body: JSON.stringify({ email: normalizedEmail }),
       });
 
@@ -70,11 +84,14 @@ export default function AuthenticationPage() {
       }
 
       setEmail(normalizedEmail);
+
       setMessage(
         result.message ||
           "If this email can sign in, you will receive a secure link shortly.",
       );
+
       setStep("sent");
+
       setResendCooldown(30);
     } catch (err) {
       setError(
@@ -89,13 +106,14 @@ export default function AuthenticationPage() {
 
   function returnToOptions() {
     setError("");
+
     setMessage("");
+
     setStep("options");
   }
 
   return (
     <main className="relative isolate flex min-h-screen items-center justify-center overflow-hidden bg-[#050605] px-4 pb-8 pt-24 text-white sm:px-6">
-      {/* Existing GravityStars background. Settings remain unchanged. */}
       <div className="pointer-events-none absolute inset-0 -z-10">
         <GravityStars
           className="h-full min-h-screen w-full bg-[#050605]"
@@ -127,6 +145,7 @@ export default function AuthenticationPage() {
             <span className="grid h-9 w-9 place-items-center rounded-lg border border-[#76B900]/25 bg-[#76B900]/10 transition group-hover:bg-[#76B900]/20">
               <BrainIcon className="h-5 w-5 text-[#76B900]" />
             </span>
+
             <span className="text-xl font-extrabold tracking-tighter text-white">
               DevMind<span className="text-[#76B900]">.</span>
             </span>
@@ -150,7 +169,6 @@ export default function AuthenticationPage() {
             transition={{ duration: 0.25 }}
             className="px-6 py-7 sm:px-10 sm:py-8"
           >
-
             <div className="mb-6 text-center">
               <h1 className="text-[26px] font-bold tracking-[-0.04em] text-white sm:text-[28px]">
                 {step === "sent" ? "Check your inbox" : "Welcome to DevMind"}
@@ -169,11 +187,11 @@ export default function AuthenticationPage() {
                 className="mb-4 flex gap-3 rounded-xl border border-red-500/20 bg-red-500/[0.07] px-4 py-2.5 text-sm leading-5 text-red-300"
               >
                 <AlertIcon className="mt-0.5 h-4 w-4 shrink-0" />
+
                 <span>{error}</span>
               </div>
             )}
 
-            {/* Success feedback */}
             {message && step === "sent" && (
               <div
                 role="status"
@@ -183,7 +201,6 @@ export default function AuthenticationPage() {
               </div>
             )}
 
-            {/* OAuth + inline email */}
             {step === "options" && (
               <div className="space-y-3">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -208,9 +225,11 @@ export default function AuthenticationPage() {
 
                 <div className="flex items-center gap-4 py-1.5">
                   <div className="h-px flex-1 bg-white/9" />
+
                   <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#686e65]">
                     Or
                   </span>
+
                   <div className="h-px flex-1 bg-white/9" />
                 </div>
 
@@ -231,6 +250,7 @@ export default function AuthenticationPage() {
                       value={email}
                       onChange={(event) => {
                         setEmail(event.target.value);
+
                         if (error) setError("");
                       }}
                       aria-invalid={Boolean(error)}
@@ -258,6 +278,7 @@ export default function AuthenticationPage() {
               <div className="space-y-3">
                 <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3">
                   <p className="text-xs text-[#7e8578]">Link sent to</p>
+
                   <p className="mt-0.5 break-all text-sm font-semibold text-white">
                     {email}
                   </p>
@@ -288,6 +309,7 @@ export default function AuthenticationPage() {
 
             <div className="mt-5 flex items-center justify-center gap-2 border-t border-white/8 pt-4">
               <ShieldIcon className="h-4 w-4 shrink-0 text-[#76B900]" />
+
               <p className="text-center text-xs leading-5 text-[#777e72]">
                 Secure sign-in protected by the DevMind authentication service.
               </p>
@@ -319,8 +341,6 @@ export default function AuthenticationPage() {
   );
 }
 
-/* Reusable inline icons: no additional icon package required. */
-
 function BrainIcon({ className = "" }: { className?: string }) {
   return (
     <svg
@@ -334,13 +354,21 @@ function BrainIcon({ className = "" }: { className?: string }) {
       aria-hidden="true"
     >
       <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
+
       <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
+
       <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4" />
+
       <path d="M17.599 6.5a3 3 0 0 0 .399-1.375" />
+
       <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5" />
+
       <path d="M3.477 10.896a4 4 0 0 1 .585-.396" />
+
       <path d="M19.938 10.5a4 4 0 0 1 .585.396" />
+
       <path d="M6 18a4 4 0 0 1-1.967-.516" />
+
       <path d="M19.967 17.484A4 4 0 0 1 18 18" />
     </svg>
   );
@@ -353,14 +381,17 @@ function GoogleIcon() {
         fill="#4285F4"
         d="M43.6 24.5c0-1.4-.1-2.8-.4-4.1H24v7.8h11a9.4 9.4 0 0 1-4.1 6.2l6.5 5.1c3.8-3.5 6.2-8.7 6.2-15Z"
       />
+
       <path
         fill="#34A853"
         d="M24 44c5.5 0 10.1-1.8 13.5-4.8L31 34.1c-1.8 1.2-4.1 2-7 2-5.3 0-9.8-3.6-11.4-8.4L6 32.8A20 20 0 0 0 24 44Z"
       />
+
       <path
         fill="#FBBC05"
         d="M12.6 27.7a12 12 0 0 1 0-7.4L6 15.2a20 20 0 0 0 0 17.6l6.6-5.1Z"
       />
+
       <path
         fill="#EA4335"
         d="M24 12c3 0 5.7 1 7.8 3.1l5.8-5.8C34.1 6 29.5 4 24 4A20 20 0 0 0 6 15.2l6.6 5.1C14.2 15.6 18.7 12 24 12Z"
@@ -393,6 +424,7 @@ function MailIcon({ className = "" }: { className?: string }) {
       aria-hidden="true"
     >
       <rect x="3" y="5" width="18" height="14" rx="2" />
+
       <path d="m4 7 8 6 8-6" />
     </svg>
   );
@@ -428,6 +460,7 @@ function ShieldIcon({ className = "" }: { className?: string }) {
       aria-hidden="true"
     >
       <path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z" />
+
       <path d="m9 12 2 2 4-4" />
     </svg>
   );
@@ -446,6 +479,7 @@ function AlertIcon({ className = "" }: { className?: string }) {
       aria-hidden="true"
     >
       <circle cx="12" cy="12" r="9" />
+
       <path d="M12 8v4M12 16h.01" />
     </svg>
   );
@@ -467,6 +501,7 @@ function SpinnerIcon() {
         strokeOpacity=".25"
         strokeWidth="3"
       />
+
       <path
         d="M21 12a9 9 0 0 0-9-9"
         stroke="currentColor"

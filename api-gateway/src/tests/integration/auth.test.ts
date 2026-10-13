@@ -67,6 +67,7 @@ describe("Authentication API", () => {
       expect(response.body).toMatchObject({
         status: "success",
       });
+
       expect(requestMagicLinkService).toHaveBeenCalledWith({
         email: "developer@example.com",
       });
@@ -117,7 +118,7 @@ describe("Authentication API", () => {
       expect(createSession).not.toHaveBeenCalled();
     });
 
-    it("creates a session and sets a secure cookie configuration", async () => {
+    it("creates a session, sets a secure cookie configuration, and redirects to onboarding", async () => {
       verifyMagicLinkService.mockResolvedValue({
         user: {
           id: "user-1",
@@ -136,7 +137,12 @@ describe("Authentication API", () => {
         "/api/auth/verify-magic-link?token=valid-token",
       );
 
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(302);
+      expect(response.headers.location).toBe(
+        "http://localhost:5174/devmind/onboarding?auth=success",
+      );
+
+      expect(verifyMagicLinkService).toHaveBeenCalledWith("valid-token");
       expect(createSession).toHaveBeenCalledWith("user-1");
 
       const cookie = response.headers["set-cookie"]?.[0];
@@ -148,7 +154,7 @@ describe("Authentication API", () => {
       expect(cookie).not.toContain("Secure");
     });
 
-    it("sets the Secure cookie attribute in production", async () => {
+    it("sets the Secure cookie attribute in production and redirects to onboarding", async () => {
       process.env.NODE_ENV = "production";
 
       verifyMagicLinkService.mockResolvedValue({
@@ -169,7 +175,12 @@ describe("Authentication API", () => {
         "/api/auth/verify-magic-link?token=valid-token",
       );
 
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(302);
+      expect(response.headers.location).toBe(
+        "http://localhost:5174/devmind/onboarding?auth=success",
+      );
+
+      expect(createSession).toHaveBeenCalledWith("user-1");
 
       const cookie = response.headers["set-cookie"]?.[0];
 
@@ -220,6 +231,7 @@ describe("Authentication API", () => {
 
       expect(response.status).toBe(200);
       expect(deleteSession).toHaveBeenCalledWith("test-session-token");
+
       expect(response.headers["set-cookie"]?.[0]).toContain(
         "devmind_session=;",
       );

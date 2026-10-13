@@ -116,7 +116,7 @@ describe("OAuth callback security", () => {
 
       expect(response.status).toBe(302);
       expect(response.headers.location).toBe(
-        "http://localhost:5174/?oauth=error&provider=google",
+        "http://localhost:5174/devmind/onboarding?oauth=error&provider=google",
       );
       expect(consumeOAuthState).not.toHaveBeenCalled();
       expect(mockOAuthMiddlewareCalls).not.toHaveBeenCalled();
@@ -171,7 +171,7 @@ describe("OAuth callback security", () => {
       expect(createSession).toHaveBeenCalledWith("oauth-user-1");
       expect(response.status).toBe(302);
       expect(response.headers.location).toBe(
-        "http://localhost:5174/?oauth=success&provider=google",
+        "http://localhost:5174/devmind/onboarding?oauth=success&provider=google",
       );
 
       const cookies = response.headers["set-cookie"] ?? "";
