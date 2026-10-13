@@ -77,15 +77,12 @@ export async function verifyMagicLink(
       maxAge: SESSION_COOKIE_MAX_AGE,
     });
 
-    res.status(200).json({
-      status: "success",
-      message: "Magic link verified successfully.",
-      data: {
-        user: result.user,
-        isNewUser: result.isNewUser,
-        sessionExpiresAt: session.expiresAt.toISOString(),
-      },
-    });
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5174";
+
+    const redirectUrl = new URL("/devmind/onboarding", frontendUrl);
+    redirectUrl.searchParams.set("auth", "success");
+
+    res.redirect(redirectUrl.toString());
   } catch {
     res.status(500).json({
       status: "error",

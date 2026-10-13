@@ -33,7 +33,7 @@ function frontendRedirect(
 ): string {
   const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5174";
 
-  const url = new URL("/", frontendUrl);
+  const url = new URL("/devmind/onboarding", frontendUrl);
   url.searchParams.set("oauth", status);
   url.searchParams.set("provider", provider);
 
