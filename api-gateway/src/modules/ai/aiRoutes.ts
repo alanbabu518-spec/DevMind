@@ -1,5 +1,10 @@
 import express, { Request, Response } from "express";
 import { analyzeCodeWithAI, sendMessageToAI } from "./aiService.js";
+import { requireAuthentication } from "../../middleware/auth.middleware.js";
+import {
+  enqueueCodeAnalysis,
+  getCodeAnalysisJob,
+} from "./analysisQueue.controller.js";
 
 const router = express.Router();
 
@@ -101,5 +106,9 @@ router.post(
     }
   },
 );
+
+router.post("/analyze/queue", requireAuthentication, enqueueCodeAnalysis);
+
+router.get("/jobs/:jobId", requireAuthentication, getCodeAnalysisJob);
 
 export default router;
