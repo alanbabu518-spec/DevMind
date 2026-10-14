@@ -11,6 +11,13 @@ export interface CodeAnalysisRequest {
   filename: string;
 }
 
+// Timeout for simple AI chat requests: 10 seconds.
+const CHAT_TIMEOUT_MS = 10_000;
+
+// Code analysis can take longer because it runs scanners
+// and may try multiple AI models.
+const ANALYSIS_TIMEOUT_MS = 180_000;
+
 export async function sendMessageToAI(
   message: string,
 ): Promise<AIServiceResult> {
@@ -19,7 +26,10 @@ export async function sendMessageToAI(
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
+  const timeout = setTimeout(
+    () => controller.abort(),
+    CHAT_TIMEOUT_MS,
+  );
 
   try {
     const response = await fetch(`${AI_SERVICE_URL}/api/chat`, {
@@ -56,7 +66,10 @@ export async function analyzeCodeWithAI(
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12000);
+  const timeout = setTimeout(
+    () => controller.abort(),
+    ANALYSIS_TIMEOUT_MS,
+  );
 
   try {
     const response = await fetch(`${AI_SERVICE_URL}/api/analyze`, {

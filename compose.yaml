@@ -7,6 +7,8 @@ services:
     environment:
       APP_NAME: "DevMind AI Service"
       ENVIRONMENT: development
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY}
+      NVIDIA_MODELS: ${NVIDIA_MODELS}
     ports:
       - "8000:8000"
     healthcheck:
