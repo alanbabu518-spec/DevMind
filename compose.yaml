@@ -8,7 +8,10 @@ services:
       APP_NAME: "DevMind AI Service"
       ENVIRONMENT: development
       NVIDIA_API_KEY: ${NVIDIA_API_KEY}
+      NVIDIA_BASE_URL: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
       NVIDIA_MODELS: ${NVIDIA_MODELS}
+      NVIDIA_DEFAULT_MODEL: ${NVIDIA_DEFAULT_MODEL:-openai/gpt-oss-20b}
+      
     ports:
       - "8000:8000"
     healthcheck:
