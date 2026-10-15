@@ -9,24 +9,28 @@ def analyze_code(
     source_code: str,
     filename: str,
 ) -> dict:
-    """Run static analysis and optionally explain findings with Gemini."""
+    """Run static analysis and add AI explanations when available."""
 
     if language.strip().lower() != "python":
         raise ValueError("Currently, only Python analysis is supported.")
 
-    # 1. Code-quality analysis
+    # 1. Run code-quality analysis.
     quality_findings = analyze_python_code(source_code)
 
-    # 2. Security vulnerability analysis
+    # 2. Run security vulnerability analysis.
     security_findings = analyze_python_security(source_code)
 
-    # 3. Hardcoded-secret detection
+    # 3. Detect potential hardcoded secrets.
     secret_findings = detect_secrets(source_code)
 
-    # Combine the original scanner findings.
-    findings = quality_findings + security_findings + secret_findings
+    # Preserve the original scanner findings.
+    findings = (
+        quality_findings
+        + security_findings
+        + secret_findings
+    )
 
-    # Count the original findings without changing their severities.
+    # Count original findings without changing their severities.
     severity_counts = {
         "error": 0,
         "warning": 0,
@@ -35,12 +39,13 @@ def analyze_code(
 
     for finding in findings:
         severity = finding.get("severity")
+
         if severity in severity_counts:
             severity_counts[severity] += 1
 
-    # 4. Ask Gemini to explain the scanner findings.
-    # The LLM service should handle provider errors and return
-    # status="unavailable" rather than losing the scanner report.
+    # 4. Request AI explanations.
+    # The explanation service handles provider failures and should
+    # return an unavailable status without discarding scanner results.
     ai_explanations = explain_findings(
         language="python",
         filename=filename,

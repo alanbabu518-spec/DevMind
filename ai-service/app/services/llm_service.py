@@ -9,6 +9,7 @@ import requests
 
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 REQUEST_TIMEOUT_SECONDS = 35
+MAX_EXPLANATION_LENGTH = 2000
 
 SECRET_PATTERNS = [
     re.compile(
@@ -57,11 +58,19 @@ def redact_finding(value: Any) -> Any:
     return value
 
 
-def _extract_json(content: str) -> dict[str, Any]:
-    """Parse and validate the model's JSON response."""
+def _extract_json(
+    content: str,
+    allowed_rules: set[str],
+) -> dict[str, Any]:
+    """
+    Parse and validate explanations.
+
+    Unknown rules are rejected, duplicate rules are ignored,
+    and missing explanations are explicitly reported.
+    """
     content = content.strip()
 
-    # Handle models that wrap JSON in Markdown code fences.
+    # Support JSON wrapped in Markdown code fences.
     if content.startswith("```"):
         content = re.sub(r"^```(?:json)?\s*", "", content)
         content = re.sub(r"\s*```$", "", content)
@@ -85,6 +94,10 @@ def _extract_json(content: str) -> dict[str, Any]:
     }
     valid_confidence = {"low", "medium", "high"}
 
+    validated: list[dict[str, str]] = []
+    explained_rules: set[str] = set()
+    rejected_rules: list[str] = []
+
     for item in explanations:
         if not isinstance(item, dict):
             raise ValueError("An explanation must be a JSON object.")
@@ -92,16 +105,68 @@ def _extract_json(content: str) -> dict[str, Any]:
         if not required_fields.issubset(item.keys()):
             raise ValueError("An explanation is missing required fields.")
 
-        for field in required_fields:
-            if not isinstance(item[field], str):
+        if any(
+            not isinstance(item[field], str)
+            for field in required_fields
+        ):
+            raise ValueError("Explanation fields must be strings.")
+
+        rule = item["rule"].strip()
+
+        # Reject explanations for rules absent from scanner evidence.
+        if rule not in allowed_rules:
+            rejected_rules.append(rule or "(empty rule)")
+            continue
+
+        # Avoid duplicate explanations for the same rule.
+        if rule in explained_rules:
+            continue
+
+        text_fields = (
+            "root_cause",
+            "impact",
+            "suggested_fix",
+        )
+
+        cleaned: dict[str, str] = {}
+
+        for field in text_fields:
+            value = item[field].strip()
+
+            if not value:
                 raise ValueError(
-                    f"Invalid value for explanation field: {field}"
+                    f"Explanation field '{field}' cannot be empty."
                 )
 
-        if item["confidence"].lower() not in valid_confidence:
-            item["confidence"] = "medium"
+            cleaned[field] = value[:MAX_EXPLANATION_LENGTH]
 
-    return {"explanations": explanations}
+        confidence = item["confidence"].strip().lower()
+
+        if confidence not in valid_confidence:
+            confidence = "medium"
+
+        validated.append({
+            "rule": rule,
+            "root_cause": cleaned["root_cause"],
+            "impact": cleaned["impact"],
+            "suggested_fix": cleaned["suggested_fix"],
+            "confidence": confidence,
+        })
+
+        explained_rules.add(rule)
+
+    missing_rules = sorted(allowed_rules - explained_rules)
+
+    return {
+        "explanations": validated,
+        "validation": {
+            "expected_rules": len(allowed_rules),
+            "explained_rules": len(explained_rules),
+            "missing_rules": missing_rules,
+            "rejected_rules": rejected_rules,
+            "complete": len(missing_rules) == 0,
+        },
+    }
 
 
 def _request_model(
@@ -111,15 +176,24 @@ def _request_model(
     filename: str,
     findings: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Request explanations from one NVIDIA-hosted model."""
+    """Request evidence-based explanations from an NVIDIA model."""
 
     safe_findings = redact_finding(findings)
+
+    allowed_rules = {
+        str(finding["rule"]).strip()
+        for finding in safe_findings
+        if isinstance(finding, dict)
+        and finding.get("rule") is not None
+        and str(finding["rule"]).strip()
+    }
 
     prompt = f"""
 You are DevMind, an AI code-analysis assistant.
 
-Explain the supplied static-analysis findings.
-Do not invent findings or claim a fix was applied or tested.
+Explain the supplied static-analysis findings using only the
+provided scanner evidence. A scanner finding is evidence of a
+detection, but the detection may be a false positive.
 
 Language: {language}
 Filename: {Path(filename).name}
@@ -127,26 +201,32 @@ Filename: {Path(filename).name}
 Scanner findings:
 {json.dumps(safe_findings, ensure_ascii=True)}
 
-Return only a valid JSON object in this format:
+Return only valid JSON in this format:
 {{
   "explanations": [
     {{
-      "rule": "scanner rule or finding name",
-      "root_cause": "why the issue may occur",
-      "impact": "possible impact",
+      "rule": "exact rule value copied from a supplied finding",
+      "root_cause": "specific reason supported by the evidence",
+      "impact": "realistic possible impact",
       "suggested_fix": "practical suggested correction",
       "confidence": "low, medium, or high"
     }}
   ]
 }}
 
-Instructions:
-- Explain only the supplied findings.
-- Use simple, concise language.
-- Do not invent evidence.
-- Do not include credentials or secrets.
-- If evidence is insufficient, say so.
-- Return an empty explanations array if there are no findings.
+Requirements:
+- Use the exact rule value from the supplied finding.
+- Explain every distinct rule supplied.
+- Use the finding message, line number, severity, and source when available.
+- Do not invent evidence, code, line numbers, or vulnerabilities.
+- Do not claim a potential secret is a confirmed real credential.
+- Do not claim a fix was applied, tested, or verified.
+- Avoid exaggerated claims about performance or memory usage.
+- If evidence is insufficient, explicitly say so and use low confidence.
+- Keep explanations concise, practical, and understandable.
+- Do not include credentials or secret values.
+- Return an empty explanations array if no findings were supplied.
+- Return JSON only, without Markdown or code fences.
 """
 
     response = requests.post(
@@ -161,8 +241,8 @@ Instructions:
                 {
                     "role": "system",
                     "content": (
-                        "You explain static-analysis findings. "
-                        "Return valid JSON only."
+                        "You explain static-analysis findings accurately. "
+                        "Use only supplied evidence and return valid JSON."
                     ),
                 },
                 {
@@ -189,7 +269,7 @@ Instructions:
     if not isinstance(content, str) or not content.strip():
         raise ValueError("The model returned empty content.")
 
-    parsed = _extract_json(content)
+    parsed = _extract_json(content, allowed_rules)
 
     return {
         "status": "success",
@@ -206,14 +286,13 @@ def explain_findings(
     findings: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """
-    Explain existing scanner findings using NVIDIA-hosted models.
+    Explain scanner findings using NVIDIA-hosted models.
 
-    Models are tried in the order configured in NVIDIA_MODELS.
-    If all fail, return an unavailable result without raising an
-    exception that would prevent the original findings being returned.
+    Raw source code is intentionally not sent to the LLM.
+    Original scanner findings remain available if all models fail.
     """
 
-    # Intentionally do not send the full source code to the LLM.
+    # Preserve the existing privacy decision.
     del source_code
 
     api_key = os.getenv("NVIDIA_API_KEY", "").strip()
@@ -231,15 +310,30 @@ def explain_findings(
             "status": "unavailable",
             "message": "NVIDIA_API_KEY is not configured.",
             "explanations": [],
+            "validation": {
+                "expected_rules": len({
+                    str(item["rule"]).strip()
+                    for item in findings
+                    if item.get("rule") is not None
+                    and str(item["rule"]).strip()
+                }),
+                "explained_rules": 0,
+                "missing_rules": sorted({
+                    str(item["rule"]).strip()
+                    for item in findings
+                    if item.get("rule") is not None
+                    and str(item["rule"]).strip()
+                }),
+                "rejected_rules": [],
+                "complete": not findings,
+            },
         }
 
-    models = list(
-        dict.fromkeys(
-            model.strip()
-            for model in configured_models.split(",")
-            if model.strip()
-        )
-    )
+    models = list(dict.fromkeys(
+        model.strip()
+        for model in configured_models.split(",")
+        if model.strip()
+    ))
 
     if not models:
         return {
@@ -248,6 +342,13 @@ def explain_findings(
             "explanations": [],
         }
 
+    allowed_rules = {
+        str(item["rule"]).strip()
+        for item in findings
+        if item.get("rule") is not None
+        and str(item["rule"]).strip()
+    }
+
     if not findings:
         return {
             "status": "success",
@@ -255,6 +356,13 @@ def explain_findings(
             "model": models[0],
             "fallback_used": False,
             "explanations": [],
+            "validation": {
+                "expected_rules": 0,
+                "explained_rules": 0,
+                "missing_rules": [],
+                "rejected_rules": [],
+                "complete": True,
+            },
         }
 
     failed_models: list[str] = []
@@ -269,13 +377,12 @@ def explain_findings(
                 findings=findings,
             )
 
-            if result.get("status") == "success":
-                result["fallback_used"] = bool(failed_models)
+            result["fallback_used"] = bool(failed_models)
 
-                if failed_models:
-                    result["failed_models"] = failed_models
+            if failed_models:
+                result["failed_models"] = failed_models
 
-                return result
+            return result
 
         except requests.Timeout:
             print(f"NVIDIA model timed out: {model}")
@@ -312,4 +419,11 @@ def explain_findings(
         ),
         "failed_models": failed_models,
         "explanations": [],
+        "validation": {
+            "expected_rules": len(allowed_rules),
+            "explained_rules": 0,
+            "missing_rules": sorted(allowed_rules),
+            "rejected_rules": [],
+            "complete": not allowed_rules,
+        },
     }
