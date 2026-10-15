@@ -116,12 +116,6 @@ const ACTS: Record<ActKey, Act> = {
   },
 };
 
-const LV: Record<Lv, [string, string]> = {
-  high: ["High", "bg-white text-black"],
-  med: ["Medium", "bg-white/20 text-white"],
-  low: ["Low", "bg-white/10 text-zinc-300"],
-  info: ["Note", "bg-white/10 text-zinc-300"],
-};
 
 const REPOS: [string, string][] = [
   ["devmind-api", "Demo repository picker (not connected to GitHub API)"],
@@ -1066,7 +1060,7 @@ export default function DevMind() {
                       ? "Connected repository"
                       : "Uploaded file"}
                   </div>
-                  <div className="break-words font-semibold leading-snug tracking-tight">
+                  <div className="wrap-break-word font-semibold leading-snug tracking-tight">
                     {project.name}
                   </div>
                   <div className="text-xs text-zinc-400">{project.meta}</div>
@@ -1266,7 +1260,7 @@ export default function DevMind() {
                                   <summary className="cursor-pointer text-sm font-medium">
                                     View complete API response
                                   </summary>
-                                  <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-zinc-300">
+                                  <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap wrap-break-word text-xs leading-relaxed text-zinc-300">
                                     {JSON.stringify(m.result ?? {}, null, 2)}
                                   </pre>
                                 </details>
@@ -1455,7 +1449,7 @@ export default function DevMind() {
       </div>
 
       <div
-        className={`dm-glass pointer-events-none fixed left-1/2 z-[60] -translate-x-1/2 rounded-full border border-white/10 bg-zinc-900/80 px-4 py-2.5 text-sm font-medium backdrop-blur-xl transition-all duration-300 ${toast ? "opacity-100" : "-translate-y-2 opacity-0"}`}
+        className={`dm-glass pointer-events-none fixed left-1/2 z-60 -translate-x-1/2 rounded-full border border-white/10 bg-zinc-900/80 px-4 py-2.5 text-sm font-medium backdrop-blur-xl transition-all duration-300 ${toast ? "opacity-100" : "-translate-y-2 opacity-0"}`}
         style={{ top: "calc(72px + env(safe-area-inset-top, 0px))" }}
       >
         {toast || "\u00A0"}
