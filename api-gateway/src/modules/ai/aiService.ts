@@ -93,3 +93,40 @@ export async function analyzeCodeWithAI(
     clearTimeout(timeout);
   }
 }
+
+export async function calculateReadinessWithAI(
+  request: CodeAnalysisRequest,
+): Promise<AIServiceResult> {
+  if (!AI_SERVICE_URL) {
+    throw new Error("AI_SERVICE_URL is not configured");
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ANALYSIS_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${AI_SERVICE_URL}/api/readiness`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+      signal: controller.signal,
+    });
+
+    const data: unknown = await response.json();
+
+    return {
+      status: response.status,
+      data,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("AI Service readiness request timed out");
+    }
+
+    throw new Error("Unable to connect to AI Service");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
