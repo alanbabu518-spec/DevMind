@@ -3,8 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import LandingPage from "../features/landing/pages/LandingPage";
 import LoginPage from "../features/auth/pages/AuthenticationPage";
 import OnboardingPage from "../features/onboarding/pages/OnboardingPage";
-import DashboardPage from "../features/dashboard/pages/DashboardPage";
-import ProjectsPage from "../features/projects/pages/ProjectsPage";
+import DevMind from "@/features/Home/pages/Devmind";
 
 export function AppRouter() {
   return (
@@ -15,10 +14,7 @@ export function AppRouter() {
 
         <Route path="/login" element={<LoginPage />} />
         <Route path="/onboarding" element={<OnboardingPage />} />
-
-        <Route path="/dashboard" element={<DashboardPage />} />
-
-        <Route path="/projects" element={<ProjectsPage />} />
+        <Route path="/Home" element={<DevMind/>} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
