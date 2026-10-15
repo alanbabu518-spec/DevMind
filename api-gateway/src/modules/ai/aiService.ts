@@ -12,7 +12,7 @@ export interface CodeAnalysisRequest {
 }
 
 // Timeout for simple AI chat requests: 10 seconds.
-const CHAT_TIMEOUT_MS = 10_000;
+const CHAT_TIMEOUT_MS = 120000;
 
 // Analysis can take longer because it runs scanners and may
 // try multiple AI models.
