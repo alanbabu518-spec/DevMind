@@ -40,7 +40,15 @@ type Project = { kind: "gh" | "zip"; name: string; meta: string; root: string };
 type Msg =
   | { id: number; t: "u"; text: string }
   | { id: number; t: "a"; text: string | null; done: boolean }
-  | { id: number; t: "run"; k: ActKey; step: number; done: boolean; result?: Record<string, unknown>; error?: string };
+  | {
+      id: number;
+      t: "run";
+      k: ActKey;
+      step: number;
+      done: boolean;
+      result?: Record<string, unknown>;
+      error?: string;
+    };
 type SheetView = "auth" | "wait" | "repos" | "files" | null;
 type DragOpts = {
   els: HTMLElement[];
@@ -115,7 +123,6 @@ const ACTS: Record<ActKey, Act> = {
     rows: [],
   },
 };
-
 
 const REPOS: [string, string][] = [
   ["devmind-api", "Demo repository picker (not connected to GitHub API)"],
@@ -382,7 +389,7 @@ export default function DevMind() {
   const [busy, setBusy] = useState(false);
   const [text, setText] = useState("");
   const [sourceCode, setSourceCode] = useState(
-    'def add(a, b):\\n    return a + b\\n',
+    "def add(a, b):\\n    return a + b\\n",
   );
   const [toast, setToast] = useState("");
   const [bell, setBell] = useState(true);
@@ -621,9 +628,7 @@ export default function DevMind() {
     try {
       setMsgs((m) =>
         m.map((x) =>
-          x.t === "run" && x.id === messageId
-            ? { ...x, step: 1 }
-            : x,
+          x.t === "run" && x.id === messageId ? { ...x, step: 1 } : x,
         ),
       );
 
@@ -1090,7 +1095,8 @@ export default function DevMind() {
                       Python source code
                     </div>
                     <div className="text-xs text-zinc-400">
-                      Paste code here. The demo repository picker does not read repository files.
+                      Paste code here. The demo repository picker does not read
+                      repository files.
                     </div>
                   </div>
                   <span className="flex-none text-xs text-zinc-500">
@@ -1099,7 +1105,9 @@ export default function DevMind() {
                 </div>
                 <textarea
                   value={sourceCode}
-                  onChange={(e) => setSourceCode(e.target.value.slice(0, 20000))}
+                  onChange={(e) =>
+                    setSourceCode(e.target.value.slice(0, 20000))
+                  }
                   maxLength={20000}
                   spellCheck={false}
                   aria-label="Python source code to analyze"
@@ -1196,7 +1204,9 @@ export default function DevMind() {
                             </div>
                           )
                         ) : m.done ? (
-                          <div className={`select-text rounded-3xl p-4 ${glass}`}>
+                          <div
+                            className={`select-text rounded-3xl p-4 ${glass}`}
+                          >
                             <div className="mb-2 font-semibold tracking-tight">
                               {m.error
                                 ? "Request failed"
@@ -1208,7 +1218,8 @@ export default function DevMind() {
                               <div className="rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-sm text-red-200">
                                 {m.error}
                                 <div className="mt-2 text-xs text-zinc-400">
-                                  Confirm the API Gateway is running on port 5001 and the AI service is healthy.
+                                  Confirm the API Gateway is running on port
+                                  5001 and the AI service is healthy.
                                 </div>
                               </div>
                             ) : (
@@ -1220,29 +1231,55 @@ export default function DevMind() {
                                         <div className="text-xs text-zinc-400">
                                           Provisional score
                                         </div>
-                                        <div className="text-3xl font-bold" style={{ color: G }}>
+                                        <div
+                                          className="text-3xl font-bold"
+                                          style={{ color: G }}
+                                        >
                                           {String(m.result.score ?? "—")}
-                                          {typeof m.result.score === "number" ? "%" : ""}
+                                          {typeof m.result.score === "number"
+                                            ? "%"
+                                            : ""}
                                         </div>
                                       </div>
                                       <div className="text-right text-sm">
                                         <div>
                                           Production ready:{" "}
-                                          <span className={m.result.production_ready === true ? "text-lime-400" : "text-amber-300"}>
-                                            {m.result.production_ready === true ? "Yes" : "No"}
+                                          <span
+                                            className={
+                                              m.result.production_ready === true
+                                                ? "text-lime-400"
+                                                : "text-amber-300"
+                                            }
+                                          >
+                                            {m.result.production_ready === true
+                                              ? "Yes"
+                                              : "No"}
                                           </span>
                                         </div>
                                         <div className="mt-1 text-xs text-zinc-400">
-                                          {String(m.result.score_type ?? "unknown score type")}
+                                          {String(
+                                            m.result.score_type ??
+                                              "unknown score type",
+                                          )}
                                         </div>
                                       </div>
                                     </div>
-                                    {Array.isArray(m.result.unknown_categories) && (
+                                    {Array.isArray(
+                                      m.result.unknown_categories,
+                                    ) && (
                                       <div className="mt-3 text-sm text-zinc-300">
-                                        <div className="mb-1 text-xs text-zinc-400">Categories without evidence</div>
+                                        <div className="mb-1 text-xs text-zinc-400">
+                                          Categories without evidence
+                                        </div>
                                         <div className="flex flex-wrap gap-1.5">
-                                          {(m.result.unknown_categories as unknown[]).map((category) => (
-                                            <span key={String(category)} className="rounded-full bg-white/10 px-2.5 py-1 text-xs">
+                                          {(
+                                            m.result
+                                              .unknown_categories as unknown[]
+                                          ).map((category) => (
+                                            <span
+                                              key={String(category)}
+                                              className="rounded-full bg-white/10 px-2.5 py-1 text-xs"
+                                            >
                                               {String(category)}
                                             </span>
                                           ))}
