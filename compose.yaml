@@ -1,4 +1,3 @@
-
 services:
   ai-service:
     build:
@@ -11,9 +10,15 @@ services:
       NVIDIA_BASE_URL: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
       NVIDIA_MODELS: ${NVIDIA_MODELS}
       NVIDIA_DEFAULT_MODEL: ${NVIDIA_DEFAULT_MODEL:-openai/gpt-oss-20b}
-      
+      REPAIR_SANDBOX_URL: http://repair-sandbox:8080
     ports:
       - "8000:8000"
+    networks:
+      - default
+      - repair-internal
+    depends_on:
+      repair-sandbox:
+        condition: service_started
     healthcheck:
       test:
         - CMD
@@ -24,6 +29,24 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  repair-sandbox:
+    build:
+      context: ./repair-sandbox
+      dockerfile: Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    cpus: 0.50
+    pids_limit: 32
+    networks:
+      - repair-internal
+    restart: unless-stopped
 
   postgres:
     image: postgres:17-alpine
@@ -120,6 +143,10 @@ services:
     depends_on:
       api-gateway:
         condition: service_healthy
+
+networks:
+  repair-internal:
+    internal: true
 
 volumes:
   devmind_postgres_data:
