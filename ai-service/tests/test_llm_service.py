@@ -1,3 +1,4 @@
+
 import json
 from unittest.mock import call, patch
 
@@ -21,7 +22,6 @@ def test_valid_explanation_is_accepted():
       ]
     }
     """
-
     result = _extract_json(content, {"B307"})
 
     assert result["validation"]["complete"] is True
@@ -43,7 +43,6 @@ def test_unknown_rule_is_rejected():
       ]
     }
     """
-
     result = _extract_json(content, {"B307"})
 
     assert result["explanations"] == []
@@ -60,7 +59,6 @@ def test_duplicate_rule_is_explained_only_once():
         "suggested_fix": "Use a safer alternative.",
         "confidence": "high",
     }
-
     result = _extract_json(
         json.dumps({"explanations": [explanation, explanation]}),
         {"B307"},
@@ -71,10 +69,7 @@ def test_duplicate_rule_is_explained_only_once():
 
 
 def test_missing_explanation_is_reported():
-    result = _extract_json(
-        '{"explanations": []}',
-        {"B307", "F401"},
-    )
+    result = _extract_json('{"explanations": []}', {"B307", "F401"})
 
     assert result["validation"]["missing_rules"] == ["B307", "F401"]
     assert result["validation"]["complete"] is False
@@ -96,12 +91,10 @@ def test_missing_required_field_is_rejected():
       ]
     }
     """
-
     with pytest.raises(ValueError):
         _extract_json(content, {"B307"})
 
 
-# Shared test data for explain_findings() tests.
 @pytest.fixture
 def scanner_findings():
     return [
@@ -148,7 +141,6 @@ def test_fallback_succeeds_when_first_model_fails(
 ):
     monkeypatch.setenv("NVIDIA_API_KEY", "test-key")
     monkeypatch.setenv("NVIDIA_MODELS", "model-one,model-two")
-
     mock_request_model.side_effect = [
         requests.Timeout("Simulated timeout"),
         valid_model_result,
@@ -165,7 +157,6 @@ def test_fallback_succeeds_when_first_model_fails(
     assert result["fallback_used"] is True
     assert result["failed_models"] == ["model-one"]
     assert result["model"] == "model-two"
-
     assert mock_request_model.call_args_list == [
         call(
             model="model-one",
@@ -192,7 +183,6 @@ def test_all_models_failing_returns_unavailable(
 ):
     monkeypatch.setenv("NVIDIA_API_KEY", "test-key")
     monkeypatch.setenv("NVIDIA_MODELS", "model-one,model-two")
-
     mock_request_model.side_effect = [
         requests.Timeout("Simulated timeout"),
         requests.ConnectionError("Simulated connection failure"),
@@ -222,7 +212,6 @@ def test_invalid_model_response_triggers_fallback(
 ):
     monkeypatch.setenv("NVIDIA_API_KEY", "test-key")
     monkeypatch.setenv("NVIDIA_MODELS", "model-one,model-two")
-
     mock_request_model.side_effect = [
         ValueError("Invalid model response"),
         valid_model_result,
