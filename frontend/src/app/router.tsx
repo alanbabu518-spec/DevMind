@@ -12,9 +12,13 @@ export function AppRouter() {
         <Route path="/" element={<LandingPage />} />
         <Route path="/devmind" element={<LandingPage />} />
 
+        {/* Keep the existing login URL */}
+        <Route path="/login" element={<LoginPage />} />
+
         <Route path="/login" element={<LoginPage />} />
         <Route path="/onboarding" element={<OnboardingPage />} />
-        <Route path="/Home" element={<DevMind/>} />
+
+        <Route path="/Home" element={<DevMind />} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

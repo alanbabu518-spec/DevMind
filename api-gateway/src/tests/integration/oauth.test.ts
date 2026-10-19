@@ -1,3 +1,4 @@
+
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -102,9 +103,15 @@ describe("OAuth callback security", () => {
     process.env.FRONTEND_URL = "http://localhost:5174";
 
     consumeOAuthState.mockResolvedValue(true);
+
     createSession.mockResolvedValue({
       token: "test-session-token",
       expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+    });
+
+    // Treat the account as an onboarding-incomplete user by default.
+    findUnique.mockResolvedValue({
+      onboardingCompleted: false,
     });
   });
 
@@ -116,8 +123,9 @@ describe("OAuth callback security", () => {
 
       expect(response.status).toBe(302);
       expect(response.headers.location).toBe(
-        "http://localhost:5174/devmind/onboarding?oauth=error&provider=google",
+        "http://localhost:5174/onboarding?oauth=error&provider=google",
       );
+
       expect(consumeOAuthState).not.toHaveBeenCalled();
       expect(mockOAuthMiddlewareCalls).not.toHaveBeenCalled();
       expect(createSession).not.toHaveBeenCalled();
@@ -169,14 +177,30 @@ describe("OAuth callback security", () => {
       expect(consumeOAuthState).toHaveBeenCalledWith(state, "google");
       expect(mockOAuthMiddlewareCalls).toHaveBeenCalledTimes(1);
       expect(createSession).toHaveBeenCalledWith("oauth-user-1");
+
       expect(response.status).toBe(302);
       expect(response.headers.location).toBe(
-        "http://localhost:5174/devmind/onboarding?oauth=success&provider=google",
+        "http://localhost:5174/onboarding?oauth=success&provider=google",
       );
 
       const cookies = response.headers["set-cookie"] ?? "";
 
       expect(String(cookies)).toContain("devmind_session=test-session-token");
+    });
+
+    it("redirects a completed account to Home", async () => {
+      findUnique.mockResolvedValue({
+        onboardingCompleted: true,
+      });
+
+      const response = await request(app)
+        .get(`/api/auth/oauth/google/callback?state=${state}`)
+        .set("Cookie", `devmind_oauth_state_google=${state}`);
+
+      expect(response.status).toBe(302);
+      expect(response.headers.location).toBe(
+        "http://localhost:5174/Home?oauth=success&provider=google",
+      );
     });
   });
 
@@ -190,6 +214,7 @@ describe("OAuth callback security", () => {
       expect(response.headers.location).toContain(
         "oauth=error&provider=github",
       );
+
       expect(consumeOAuthState).not.toHaveBeenCalled();
       expect(createSession).not.toHaveBeenCalled();
     });

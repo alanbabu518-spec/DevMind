@@ -30,6 +30,7 @@ export type AccountMinAggregateOutputType = {
   providerAccountId: string | null
   userId: string | null
   createdAt: Date | null
+  githubAccessTokenEncrypted: string | null
 }
 
 export type AccountMaxAggregateOutputType = {
@@ -38,6 +39,7 @@ export type AccountMaxAggregateOutputType = {
   providerAccountId: string | null
   userId: string | null
   createdAt: Date | null
+  githubAccessTokenEncrypted: string | null
 }
 
 export type AccountCountAggregateOutputType = {
@@ -46,6 +48,7 @@ export type AccountCountAggregateOutputType = {
   providerAccountId: number
   userId: number
   createdAt: number
+  githubAccessTokenEncrypted: number
   _all: number
 }
 
@@ -56,6 +59,7 @@ export type AccountMinAggregateInputType = {
   providerAccountId?: true
   userId?: true
   createdAt?: true
+  githubAccessTokenEncrypted?: true
 }
 
 export type AccountMaxAggregateInputType = {
@@ -64,6 +68,7 @@ export type AccountMaxAggregateInputType = {
   providerAccountId?: true
   userId?: true
   createdAt?: true
+  githubAccessTokenEncrypted?: true
 }
 
 export type AccountCountAggregateInputType = {
@@ -72,6 +77,7 @@ export type AccountCountAggregateInputType = {
   providerAccountId?: true
   userId?: true
   createdAt?: true
+  githubAccessTokenEncrypted?: true
   _all?: true
 }
 
@@ -153,6 +159,7 @@ export type AccountGroupByOutputType = {
   providerAccountId: string
   userId: string
   createdAt: Date
+  githubAccessTokenEncrypted: string | null
   _count: AccountCountAggregateOutputType | null
   _min: AccountMinAggregateOutputType | null
   _max: AccountMaxAggregateOutputType | null
@@ -182,6 +189,7 @@ export type AccountWhereInput = {
   providerAccountId?: Prisma.StringFilter<"Account"> | string
   userId?: Prisma.StringFilter<"Account"> | string
   createdAt?: Prisma.DateTimeFilter<"Account"> | Date | string
+  githubAccessTokenEncrypted?: Prisma.StringNullableFilter<"Account"> | string | null
   user?: Prisma.XOR<Prisma.UserScalarRelationFilter, Prisma.UserWhereInput>
 }
 
@@ -191,6 +199,7 @@ export type AccountOrderByWithRelationInput = {
   providerAccountId?: Prisma.SortOrder
   userId?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  githubAccessTokenEncrypted?: Prisma.SortOrderInput | Prisma.SortOrder
   user?: Prisma.UserOrderByWithRelationInput
 }
 
@@ -204,6 +213,7 @@ export type AccountWhereUniqueInput = Prisma.AtLeast<{
   providerAccountId?: Prisma.StringFilter<"Account"> | string
   userId?: Prisma.StringFilter<"Account"> | string
   createdAt?: Prisma.DateTimeFilter<"Account"> | Date | string
+  githubAccessTokenEncrypted?: Prisma.StringNullableFilter<"Account"> | string | null
   user?: Prisma.XOR<Prisma.UserScalarRelationFilter, Prisma.UserWhereInput>
 }, "id" | "provider_providerAccountId">
 
@@ -213,6 +223,7 @@ export type AccountOrderByWithAggregationInput = {
   providerAccountId?: Prisma.SortOrder
   userId?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  githubAccessTokenEncrypted?: Prisma.SortOrderInput | Prisma.SortOrder
   _count?: Prisma.AccountCountOrderByAggregateInput
   _max?: Prisma.AccountMaxOrderByAggregateInput
   _min?: Prisma.AccountMinOrderByAggregateInput
@@ -227,6 +238,7 @@ export type AccountScalarWhereWithAggregatesInput = {
   providerAccountId?: Prisma.StringWithAggregatesFilter<"Account"> | string
   userId?: Prisma.StringWithAggregatesFilter<"Account"> | string
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"Account"> | Date | string
+  githubAccessTokenEncrypted?: Prisma.StringNullableWithAggregatesFilter<"Account"> | string | null
 }
 
 export type AccountCreateInput = {
@@ -234,6 +246,7 @@ export type AccountCreateInput = {
   provider: string
   providerAccountId: string
   createdAt?: Date | string
+  githubAccessTokenEncrypted?: string | null
   user: Prisma.UserCreateNestedOneWithoutAccountsInput
 }
 
@@ -243,6 +256,7 @@ export type AccountUncheckedCreateInput = {
   providerAccountId: string
   userId: string
   createdAt?: Date | string
+  githubAccessTokenEncrypted?: string | null
 }
 
 export type AccountUpdateInput = {
@@ -250,6 +264,7 @@ export type AccountUpdateInput = {
   provider?: Prisma.StringFieldUpdateOperationsInput | string
   providerAccountId?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  githubAccessTokenEncrypted?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   user?: Prisma.UserUpdateOneRequiredWithoutAccountsNestedInput
 }
 
@@ -259,6 +274,7 @@ export type AccountUncheckedUpdateInput = {
   providerAccountId?: Prisma.StringFieldUpdateOperationsInput | string
   userId?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  githubAccessTokenEncrypted?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
 }
 
 export type AccountCreateManyInput = {
@@ -267,6 +283,7 @@ export type AccountCreateManyInput = {
   providerAccountId: string
   userId: string
   createdAt?: Date | string
+  githubAccessTokenEncrypted?: string | null
 }
 
 export type AccountUpdateManyMutationInput = {
@@ -274,6 +291,7 @@ export type AccountUpdateManyMutationInput = {
   provider?: Prisma.StringFieldUpdateOperationsInput | string
   providerAccountId?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  githubAccessTokenEncrypted?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
 }
 
 export type AccountUncheckedUpdateManyInput = {
@@ -282,6 +300,7 @@ export type AccountUncheckedUpdateManyInput = {
   providerAccountId?: Prisma.StringFieldUpdateOperationsInput | string
   userId?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  githubAccessTokenEncrypted?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
 }
 
 export type AccountListRelationFilter = {
@@ -305,6 +324,7 @@ export type AccountCountOrderByAggregateInput = {
   providerAccountId?: Prisma.SortOrder
   userId?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  githubAccessTokenEncrypted?: Prisma.SortOrder
 }
 
 export type AccountMaxOrderByAggregateInput = {
@@ -313,6 +333,7 @@ export type AccountMaxOrderByAggregateInput = {
   providerAccountId?: Prisma.SortOrder
   userId?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  githubAccessTokenEncrypted?: Prisma.SortOrder
 }
 
 export type AccountMinOrderByAggregateInput = {
@@ -321,6 +342,7 @@ export type AccountMinOrderByAggregateInput = {
   providerAccountId?: Prisma.SortOrder
   userId?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
+  githubAccessTokenEncrypted?: Prisma.SortOrder
 }
 
 export type AccountCreateNestedManyWithoutUserInput = {
@@ -370,6 +392,7 @@ export type AccountCreateWithoutUserInput = {
   provider: string
   providerAccountId: string
   createdAt?: Date | string
+  githubAccessTokenEncrypted?: string | null
 }
 
 export type AccountUncheckedCreateWithoutUserInput = {
@@ -377,6 +400,7 @@ export type AccountUncheckedCreateWithoutUserInput = {
   provider: string
   providerAccountId: string
   createdAt?: Date | string
+  githubAccessTokenEncrypted?: string | null
 }
 
 export type AccountCreateOrConnectWithoutUserInput = {
@@ -414,6 +438,7 @@ export type AccountScalarWhereInput = {
   providerAccountId?: Prisma.StringFilter<"Account"> | string
   userId?: Prisma.StringFilter<"Account"> | string
   createdAt?: Prisma.DateTimeFilter<"Account"> | Date | string
+  githubAccessTokenEncrypted?: Prisma.StringNullableFilter<"Account"> | string | null
 }
 
 export type AccountCreateManyUserInput = {
@@ -421,6 +446,7 @@ export type AccountCreateManyUserInput = {
   provider: string
   providerAccountId: string
   createdAt?: Date | string
+  githubAccessTokenEncrypted?: string | null
 }
 
 export type AccountUpdateWithoutUserInput = {
@@ -428,6 +454,7 @@ export type AccountUpdateWithoutUserInput = {
   provider?: Prisma.StringFieldUpdateOperationsInput | string
   providerAccountId?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  githubAccessTokenEncrypted?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
 }
 
 export type AccountUncheckedUpdateWithoutUserInput = {
@@ -435,6 +462,7 @@ export type AccountUncheckedUpdateWithoutUserInput = {
   provider?: Prisma.StringFieldUpdateOperationsInput | string
   providerAccountId?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  githubAccessTokenEncrypted?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
 }
 
 export type AccountUncheckedUpdateManyWithoutUserInput = {
@@ -442,6 +470,7 @@ export type AccountUncheckedUpdateManyWithoutUserInput = {
   provider?: Prisma.StringFieldUpdateOperationsInput | string
   providerAccountId?: Prisma.StringFieldUpdateOperationsInput | string
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  githubAccessTokenEncrypted?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
 }
 
 
@@ -452,6 +481,7 @@ export type AccountSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs 
   providerAccountId?: boolean
   userId?: boolean
   createdAt?: boolean
+  githubAccessTokenEncrypted?: boolean
   user?: boolean | Prisma.UserDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["account"]>
 
@@ -461,6 +491,7 @@ export type AccountSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Exten
   providerAccountId?: boolean
   userId?: boolean
   createdAt?: boolean
+  githubAccessTokenEncrypted?: boolean
   user?: boolean | Prisma.UserDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["account"]>
 
@@ -470,6 +501,7 @@ export type AccountSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Exten
   providerAccountId?: boolean
   userId?: boolean
   createdAt?: boolean
+  githubAccessTokenEncrypted?: boolean
   user?: boolean | Prisma.UserDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["account"]>
 
@@ -479,9 +511,10 @@ export type AccountSelectScalar = {
   providerAccountId?: boolean
   userId?: boolean
   createdAt?: boolean
+  githubAccessTokenEncrypted?: boolean
 }
 
-export type AccountOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "provider" | "providerAccountId" | "userId" | "createdAt", ExtArgs["result"]["account"]>
+export type AccountOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "provider" | "providerAccountId" | "userId" | "createdAt" | "githubAccessTokenEncrypted", ExtArgs["result"]["account"]>
 export type AccountInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   user?: boolean | Prisma.UserDefaultArgs<ExtArgs>
 }
@@ -503,6 +536,7 @@ export type $AccountPayload<ExtArgs extends runtime.Types.Extensions.InternalArg
     providerAccountId: string
     userId: string
     createdAt: Date
+    githubAccessTokenEncrypted: string | null
   }, ExtArgs["result"]["account"]>
   composites: {}
 }
@@ -932,6 +966,7 @@ export interface AccountFieldRefs {
   readonly providerAccountId: Prisma.FieldRef<"Account", 'String'>
   readonly userId: Prisma.FieldRef<"Account", 'String'>
   readonly createdAt: Prisma.FieldRef<"Account", 'DateTime'>
+  readonly githubAccessTokenEncrypted: Prisma.FieldRef<"Account", 'String'>
 }
     
 

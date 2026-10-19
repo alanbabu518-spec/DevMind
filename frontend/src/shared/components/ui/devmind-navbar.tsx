@@ -85,7 +85,7 @@ export default function DevMindNavbar() {
         {/* Right: CTA */}
         <div className="flex items-center gap-2 justify-self-end">
           <Link
-            to="/devmind/login"
+            to="/login"
             className="hidden items-center gap-2 rounded-full bg-[#76B900] px-5 py-2.5 text-sm font-semibold text-[#101509] transition-colors hover:bg-[#91d51b] sm:inline-flex"
           >
             Get started <ArrowRight size={16} />
@@ -106,7 +106,7 @@ export default function DevMindNavbar() {
         <div className="mx-3 mt-2 rounded-2xl border border-white/15 bg-[#0b0e08]/95 p-3 backdrop-blur-xl md:hidden">
           {LINKS.map((l) => renderLink(l, "block rounded-2xl py-3 text-base"))}
           <Link
-            to="/devmind/login"
+            to="/login"
             className="mt-2 flex items-center justify-center gap-2 rounded-2xl bg-[#76B900] px-4 py-3 font-semibold text-[#101509]"
           >
             Get started <ArrowRight size={16} />

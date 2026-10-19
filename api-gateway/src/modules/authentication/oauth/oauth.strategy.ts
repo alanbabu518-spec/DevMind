@@ -70,6 +70,11 @@ export function configureOAuthStrategies(): void {
   const githubClientId = process.env.GITHUB_CLIENT_ID;
   const githubClientSecret = process.env.GITHUB_CLIENT_SECRET;
 
+  const githubConnectClientId =
+    process.env.GITHUB_CONNECT_CLIENT_ID;
+  const githubConnectClientSecret =
+    process.env.GITHUB_CONNECT_CLIENT_SECRET;
+
   if (
     !callbackBaseUrl ||
     !googleClientId ||
@@ -77,9 +82,21 @@ export function configureOAuthStrategies(): void {
     !githubClientId ||
     !githubClientSecret
   ) {
-    throw new Error("OAuth environment variables are not configured");
+    throw new Error(
+      "Google and GitHub sign-in OAuth environment variables are not configured",
+    );
   }
 
+  if (
+    !githubConnectClientId ||
+    !githubConnectClientSecret
+  ) {
+    throw new Error(
+      "GitHub connection OAuth environment variables are not configured",
+    );
+  }
+
+  // Existing Google sign-in strategy.
   passport.use(
     new GoogleStrategy(
       {
@@ -117,6 +134,8 @@ export function configureOAuthStrategies(): void {
     ),
   );
 
+  // Existing GitHub sign-in strategy.
+  // Keep its callback and permissions separate from repository access.
   passport.use(
     new GitHubStrategy(
       {
@@ -148,6 +167,46 @@ export function configureOAuthStrategies(): void {
           });
 
           return done(null, { id: user.id });
+        } catch (error) {
+          return done(error as Error);
+        }
+      },
+    ),
+  );
+
+  // Separate GitHub strategy for connecting repositories
+  // to an already authenticated DevMind account.
+  passport.use(
+    "github-connect",
+    new GitHubStrategy(
+      {
+        clientID: githubConnectClientId,
+        clientSecret: githubConnectClientSecret,
+        callbackURL: `${callbackBaseUrl}/api/github/connect/callback`,
+        scope: ["repo", "user:email"],
+      },
+      async (
+        accessToken: string,
+        _refreshToken: string,
+        profile: GitHubProfile,
+        done: VerifyCallback,
+      ) => {
+        try {
+          if (!profile.id || !accessToken) {
+            return done(null, false, {
+              message: "GitHub did not provide the required account details",
+            });
+          }
+
+          // Do not create a DevMind user here.
+          // The protected callback will validate the signed-in user,
+          // verify OAuth state, check account ownership, and encrypt
+          // the token before persisting it.
+          return done(null, {
+            providerAccountId: profile.id,
+            username: profile.username ?? null,
+            accessToken,
+          });
         } catch (error) {
           return done(error as Error);
         }

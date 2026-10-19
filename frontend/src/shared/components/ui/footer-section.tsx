@@ -56,7 +56,7 @@ export default function FooterSection() {
             </div>
 
             <Link
-              to="/devmind/login"
+              to="/login"
               className="group inline-flex w-fit shrink-0 items-center justify-center gap-2 rounded-lg bg-[#76B900] px-5 py-3 text-sm font-semibold text-black transition-all duration-200 hover:bg-[#91d51b] hover:shadow-[0_0_28px_rgba(118,185,0,0.18)]"
             >
               Get Started

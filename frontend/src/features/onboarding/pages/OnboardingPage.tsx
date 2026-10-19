@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, BrainIcon, Check} from "lucide-react";
-import {useNavigate } from "react-router-dom";
+import { ArrowLeft, ArrowRight, BrainIcon, Check } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { completeOnboarding } from "@/features/auth/services/authApi";
 
 const questions = [
   {
@@ -127,6 +128,8 @@ export default function OnboardingPage() {
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<Answers>({});
   const [direction, setDirection] = useState<Direction>("forward");
+  const [savingPlan, setSavingPlan] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
 
   const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const locked = useRef(false);
@@ -135,12 +138,17 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     return () => {
-      if (advanceTimer.current) clearTimeout(advanceTimer.current);
+      if (advanceTimer.current) {
+        clearTimeout(advanceTimer.current);
+      }
     };
   }, []);
 
   function cancelPendingAdvance() {
-    if (advanceTimer.current) clearTimeout(advanceTimer.current);
+    if (advanceTimer.current) {
+      clearTimeout(advanceTimer.current);
+    }
+
     advanceTimer.current = null;
     locked.current = false;
   }
@@ -150,11 +158,10 @@ export default function OnboardingPage() {
     setScreen("questions");
   }
 
-  // Selecting an answer highlights it, then automatically moves to the next question
   function selectAnswer(answer: string) {
-    if (locked.current) return;
-    locked.current = true;
+    if (locked.current || savingPlan) return;
 
+    locked.current = true;
     setAnswers((previous) => ({ ...previous, [step]: answer }));
 
     advanceTimer.current = setTimeout(() => {
@@ -167,11 +174,15 @@ export default function OnboardingPage() {
       }
 
       locked.current = false;
+      advanceTimer.current = null;
     }, ADVANCE_DELAY);
   }
 
   function goBack() {
+    if (savingPlan) return;
+
     cancelPendingAdvance();
+    setErrorMessage("");
     setDirection("back");
 
     if (screen === "pricing") {
@@ -189,64 +200,109 @@ export default function OnboardingPage() {
   }
 
   function skipOnboarding() {
+    if (savingPlan) return;
+
     cancelPendingAdvance();
+    setErrorMessage("");
     setDirection("forward");
     setScreen("pricing");
   }
 
-  function choosePlan(planName: string) {
-    navigate("/devmind/dashboard", {
-      state: {
-        onboardingAnswers: answers,
-        selectedPlan: planName,
-      },
-    });
+  async function choosePlan(planName: string) {
+    if (savingPlan) return;
+
+    setSavingPlan(planName);
+    setErrorMessage("");
+
+    try {
+      // Persist completion and plan before navigating away.
+      await completeOnboarding(planName);
+
+      navigate("/Home", {
+        replace: true,
+        state: {
+          onboardingAnswers: answers,
+          selectedPlan: planName,
+        },
+      });
+    } catch (error) {
+      console.error("Failed to complete onboarding:", error);
+
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to save your plan. Please try again.",
+      );
+    } finally {
+      setSavingPlan(null);
+    }
   }
 
   return (
     <main className="dm-mono relative min-h-dvh overflow-x-hidden bg-black text-white">
-      {/* Fonts + animations */}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
-        .dm-mono { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-feature-settings: 'calt' 1, 'ss02' 1; }
-        .dm-sans { font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif; }
+        .dm-mono {
+          font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-feature-settings: 'calt' 1, 'ss02' 1;
+        }
+
+        .dm-sans {
+          font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+        }
 
         @keyframes dm-slide-in-right {
           from { opacity: 0; transform: translateX(40px); }
-          to   { opacity: 1; transform: translateX(0); }
+          to { opacity: 1; transform: translateX(0); }
         }
+
         @keyframes dm-slide-in-left {
           from { opacity: 0; transform: translateX(-40px); }
-          to   { opacity: 1; transform: translateX(0); }
+          to { opacity: 1; transform: translateX(0); }
         }
+
         @keyframes dm-fade-up {
           from { opacity: 0; transform: translateY(16px); }
-          to   { opacity: 1; transform: translateY(0); }
+          to { opacity: 1; transform: translateY(0); }
         }
-        .dm-slide-forward { animation: dm-slide-in-right 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
-        .dm-slide-back    { animation: dm-slide-in-left 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
-        .dm-fade-up       { animation: dm-fade-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
-        .dm-option        { animation: dm-fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+        .dm-slide-forward {
+          animation: dm-slide-in-right 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+        }
+
+        .dm-slide-back {
+          animation: dm-slide-in-left 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+        }
+
+        .dm-fade-up,
+        .dm-option {
+          animation: dm-fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+        }
+
         @media (prefers-reduced-motion: reduce) {
-          .dm-slide-forward, .dm-slide-back, .dm-fade-up, .dm-option { animation: none; }
+          .dm-slide-forward,
+          .dm-slide-back,
+          .dm-fade-up,
+          .dm-option {
+            animation: none;
+          }
         }
       `}</style>
 
-      {/* Subtle green background glow */}
       <div
         aria-hidden="true"
         className="pointer-events-none absolute left-1/2 top-1/3 h-80 w-80 -translate-x-1/2 rounded-full bg-[#76B900]/[0.035] blur-[120px]"
       />
 
-      {/* Header: back + logo + progress line + step + skip */}
       <header className="relative z-10 flex h-17 items-center gap-4 px-5 sm:px-8">
         {screen !== "welcome" && (
           <button
             type="button"
             onClick={goBack}
+            disabled={Boolean(savingPlan)}
             aria-label="Go back"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white/50 transition-colors hover:bg-white/5 hover:text-white"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white/50 transition-colors hover:bg-white/5 hover:text-white disabled:opacity-50"
           >
             <ArrowLeft size={19} />
           </button>
@@ -295,14 +351,14 @@ export default function OnboardingPage() {
           <button
             type="button"
             onClick={skipOnboarding}
-            className="shrink-0 text-sm text-white/50 transition-colors hover:text-white"
+            disabled={Boolean(savingPlan)}
+            className="shrink-0 text-sm text-white/50 transition-colors hover:text-white disabled:opacity-50"
           >
             Skip for now
           </button>
         )}
       </header>
 
-      {/* Welcome */}
       {screen === "welcome" && (
         <section className="relative flex min-h-[calc(100dvh-68px)] items-center justify-center px-5 pb-24">
           <div className="dm-fade-up w-full max-w-175">
@@ -316,7 +372,7 @@ export default function OnboardingPage() {
 
             <p className="dm-sans mt-6 max-w-155 text-base leading-7 text-white/55 sm:text-lg">
               A few quick questions, then you&apos;ll see the plan that fits
-              your workflow. About 2 minutes, no account needed yet.
+              your workflow. You can skip the questions at any time.
             </p>
 
             <button
@@ -331,7 +387,6 @@ export default function OnboardingPage() {
         </section>
       )}
 
-      {/* Questions */}
       {screen === "questions" && (
         <section className="relative flex min-h-[calc(100dvh-68px)] items-center justify-center px-5 pb-24">
           <div
@@ -357,15 +412,19 @@ export default function OnboardingPage() {
                     key={option}
                     type="button"
                     aria-pressed={selected}
+                    disabled={Boolean(savingPlan)}
                     onClick={() => selectAnswer(option)}
                     style={{ animationDelay: `${index * 60}ms` }}
                     className={`dm-option flex min-h-16.5 w-full items-center justify-between gap-4 rounded-xl border px-5 py-4 text-left text-base transition-all duration-200 ${
                       selected
-                        ? "border-[#76B900]/70 bg-[#76B900]/8 text-white"
-                        : "border-white/9 bg-[#0a0a0d] text-white/90 hover:border-[#76B900]/40 hover:bg-[#101014]"
+                        ? "border-[#76B900]/70 bg-[#76B900]/[0.08] text-white"
+                        : "border-white/10 bg-[#0a0a0d] text-white/90 hover:border-[#76B900]/40 hover:bg-[#101014]"
                     }`}
                   >
                     <span>{option}</span>
+                    {selected && (
+                      <Check size={18} className="shrink-0 text-[#76B900]" />
+                    )}
                   </button>
                 );
               })}
@@ -374,9 +433,8 @@ export default function OnboardingPage() {
         </section>
       )}
 
-      {/* Pricing: fits one screen on desktop, stacks and scrolls only on mobile */}
       {screen === "pricing" && (
-        <section className="relative mx-auto flex w-full max-w-275 flex-col justify-center px-5 pb-8 sm:px-8 md:h-[calc(100dvh-68px)] md:pb-6">
+        <section className="relative mx-auto flex w-full max-w-275 flex-col justify-center px-5 pb-8 sm:px-8 md:min-h-[calc(100dvh-68px)] md:pb-6">
           <div className="dm-fade-up mx-auto mb-5 max-w-2xl text-center md:mb-[clamp(12px,3vh,32px)]">
             <h1 className="text-3xl font-semibold tracking-tight md:text-[clamp(26px,4.6vh,40px)]">
               Choose your plan.
@@ -387,67 +445,82 @@ export default function OnboardingPage() {
             </p>
           </div>
 
+          {errorMessage && (
+            <p
+              role="alert"
+              className="dm-sans mx-auto mb-4 max-w-xl rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+            >
+              {errorMessage}
+            </p>
+          )}
+
           <div className="grid grid-cols-1 items-stretch gap-3 md:grid-cols-3 md:gap-4">
-            {plans.map((plan, index) => (
-              <article
-                key={plan.name}
-                style={{ animationDelay: `${index * 100}ms` }}
-                className={`dm-fade-up relative flex flex-col rounded-2xl border p-5 md:p-[clamp(16px,2.6vh,24px)] ${
-                  plan.featured
-                    ? "border-[#76B900]/60 bg-[#76B900]/45"
-                    : "border-white/10 bg-[#0b0b0d]"
-                }`}
-              >
-                {plan.featured && (
-                  <span className="absolute right-4 top-4 rounded-full bg-[#76B900] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-black">
-                    Popular
-                  </span>
-                )}
+            {plans.map((plan, index) => {
+              const isSaving = savingPlan === plan.name;
+              const isDisabled = savingPlan !== null;
 
-                <h2 className="text-base font-semibold">{plan.name}</h2>
-
-                <p className="dm-sans mt-2 text-[13px] leading-5 text-white/50 md:min-h-10">
-                  {plan.description}
-                </p>
-
-                <div className="mt-4 flex items-baseline gap-1 md:mt-[clamp(8px,1.8vh,16px)]">
-                  <span className="text-4xl font-semibold tracking-tight md:text-[clamp(28px,4.8vh,38px)]">
-                    {plan.price}
-                  </span>
-                  <span className="text-xs text-white/40">/ month</span>
-                </div>
-
-                <div className="my-4 h-px bg-white/10 md:my-[clamp(10px,2vh,18px)]" />
-
-                <ul className="flex-1 space-y-2.5 md:space-y-[clamp(6px,1.3vh,10px)]">
-                  {plan.features.map((feature) => (
-                    <li
-                      key={feature}
-                      className="dm-sans flex items-start gap-2.5 text-[13px] leading-5 text-white/70"
-                    >
-                      <Check
-                        size={15}
-                        className="mt-0.5 shrink-0 text-[#76B900]"
-                      />
-                      {feature}
-                    </li>
-                  ))}
-                </ul>
-
-                <button
-                  type="button"
-                  onClick={() => choosePlan(plan.name)}
-                  className={`mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors md:mt-[clamp(12px,2.4vh,20px)] ${
+              return (
+                <article
+                  key={plan.name}
+                  style={{ animationDelay: `${index * 100}ms` }}
+                  className={`dm-fade-up relative flex flex-col rounded-2xl border p-5 md:p-[clamp(16px,2.6vh,24px)] ${
                     plan.featured
-                      ? "bg-[#76B900] text-black hover:bg-[#91d51b]"
-                      : "border border-white/15 bg-white/3 text-white hover:border-[#76B900]/50 hover:bg-white/06"
+                      ? "border-[#76B900]/60 bg-[#76B900]/[0.045]"
+                      : "border-white/10 bg-[#0b0b0d]"
                   }`}
                 >
-                  {plan.action}
-                  <ArrowRight size={15} />
-                </button>
-              </article>
-            ))}
+                  {plan.featured && (
+                    <span className="absolute right-4 top-4 rounded-full bg-[#76B900] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-black">
+                      Popular
+                    </span>
+                  )}
+
+                  <h2 className="text-base font-semibold">{plan.name}</h2>
+
+                  <p className="dm-sans mt-2 text-[13px] leading-5 text-white/50 md:min-h-10">
+                    {plan.description}
+                  </p>
+
+                  <div className="mt-4 flex items-baseline gap-1 md:mt-[clamp(8px,1.8vh,16px)]">
+                    <span className="text-4xl font-semibold tracking-tight md:text-[clamp(28px,4.8vh,38px)]">
+                      {plan.price}
+                    </span>
+                    <span className="text-xs text-white/40">/ month</span>
+                  </div>
+
+                  <div className="my-4 h-px bg-white/10 md:my-[clamp(10px,2vh,18px)]" />
+
+                  <ul className="flex-1 space-y-2.5 md:space-y-[clamp(6px,1.3vh,10px)]">
+                    {plan.features.map((feature) => (
+                      <li
+                        key={feature}
+                        className="dm-sans flex items-start gap-2.5 text-[13px] leading-5 text-white/70"
+                      >
+                        <Check
+                          size={15}
+                          className="mt-0.5 shrink-0 text-[#76B900]"
+                        />
+                        {feature}
+                      </li>
+                    ))}
+                  </ul>
+
+                  <button
+                    type="button"
+                    disabled={isDisabled}
+                    onClick={() => choosePlan(plan.name)}
+                    className={`mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 md:mt-[clamp(12px,2.4vh,20px)] ${
+                      plan.featured
+                        ? "bg-[#76B900] text-black hover:bg-[#91d51b]"
+                        : "border border-white/15 bg-white/[0.03] text-white hover:border-[#76B900]/50 hover:bg-white/[0.06]"
+                    }`}
+                  >
+                    {isSaving ? "Saving plan..." : plan.action}
+                    {!isSaving && <ArrowRight size={15} />}
+                  </button>
+                </article>
+              );
+            })}
           </div>
 
           <p className="dm-sans mt-4 text-center text-[11px] leading-4 text-white/30 md:mt-[clamp(8px,1.8vh,16px)]">

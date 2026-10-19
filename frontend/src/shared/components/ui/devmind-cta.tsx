@@ -19,7 +19,7 @@ export default function DevMindCta() {
               Create your first project and see what your code is really doing.
             </p>
             <Link
-              to="/devmind/login"
+              to="/login"
               className="group relative mt-9 inline-flex items-center gap-3 rounded-full bg-[#76B900] py-1.5 pl-6 pr-1.5 font-semibold text-[#101509] transition-colors hover:bg-[#91d51b]"
             >
               Get started free
