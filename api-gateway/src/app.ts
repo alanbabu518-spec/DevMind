@@ -6,6 +6,7 @@ import databaseRoutes from "./routes/databaseRoutes";
 import authRoutes from "./modules/authentication/auth.routes";
 import passport from "passport";
 import projectRoutes from "./modules/projects/project.routes";
+import githubRoutes from "./modules/github/github.routes";
 
 const app = express();
 
@@ -14,6 +15,7 @@ app.use(
     origin: [
       "http://localhost:5173",
       "http://localhost:5174",
+      "http://localhost:8081",
     ],
     credentials: true,
   }),
@@ -43,6 +45,7 @@ app.use("/api/ai", aiRoutes);
 app.use("/", databaseRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/projects", projectRoutes);
+app.use("/api/github", githubRoutes);
 
 app.get("/ready", async (_req, res) => {
   const aiServiceUrl = process.env.AI_SERVICE_URL;

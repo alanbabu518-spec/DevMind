@@ -1,55 +1,91 @@
-import { useEffect, useRef, useState } from "react";
-import type { ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
-  GitBranch as Github,
-  FileArchive,
-  Bell,
-  Menu,
-  ArrowUp,
-  ScanSearch,
-  ShieldAlert,
-  Network,
+  AlertCircle,
+  ArrowDownToLine,
+  ArrowRight,
   Check,
-  CheckCircle2,
+  ChevronDown,
   ChevronRight,
-  Sparkles,
+  Code2,
+  Copy,
+  File,
+  FileCode2,
+  FileJson,
+  FileText,
   Folder,
   FolderOpen,
-  FileCode,
-  FileText,
+  GitBranch,
+  Info,
+  LoaderCircle,
+  Lock,
+  LockKeyhole,
+  Menu,
+  MessageSquareText,
   Plus,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  Sparkles,
+  Unplug,
   X,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { FaGithub } from "react-icons/fa";
+import AiMascotInput from "../components/ui/ai-mascot-input";
+import type {
+  AIModel,
+  ChatSubmitData,
+} from "../components/ui/ai-mascot-input";
 
-const G = "#76B900";
-const G14 = "rgba(118,185,0,.14)";
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:5001"
+).replace(/\/$/, "");
 
-type ActKey = "all" | "vuln" | "tree" | "readiness";
-type Lv = "high" | "med" | "low" | "info";
-type Act = {
-  title: string;
-  sub: string;
-  Icon: LucideIcon;
-  steps: string[];
-  head: string;
-  rows: [Lv, string][];
+/* ------------------------------------------------------------------ */
+/*  Types                                                              */
+/* ------------------------------------------------------------------ */
+type JsonRecord = Record<string, unknown>;
+type GithubRepo = {
+  id: number | string;
+  name: string;
+  full_name: string;
+  fullName?: string;
+  description?: string | null;
+  language?: string | null;
+  private?: boolean;
+  default_branch?: string;
+  defaultBranch?: string;
+  updated_at?: string;
+  updatedAt?: string;
+  html_url?: string;
+  url?: string;
 };
-type TNode = { name: string; kids?: TNode[] };
-type Project = { kind: "gh" | "zip"; name: string; meta: string; root: string };
-type Msg =
-  | { id: number; t: "u"; text: string }
-  | { id: number; t: "a"; text: string | null; done: boolean }
-  | {
-      id: number;
-      t: "run";
-      k: ActKey;
-      step: number;
-      done: boolean;
-      result?: Record<string, unknown>;
-      error?: string;
-    };
-type SheetView = "auth" | "wait" | "repos" | "files" | null;
+type GithubBranch = { name: string; protected?: boolean };
+type GithubEntry = {
+  name: string;
+  path: string;
+  type: "file" | "dir" | string;
+  size?: number;
+  sha?: string;
+  download_url?: string | null;
+  content?: string;
+  text?: string;
+  decodedContent?: string;
+  encoding?: string;
+};
+type TreeNode = GithubEntry & { children?: TreeNode[] };
+type GithubStatus = {
+  connected: boolean;
+  username?: string;
+  login?: string;
+  avatar_url?: string;
+  avatarUrl?: string;
+};
+type Notice = { type: "success" | "error" | "info"; text: string };
+type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
+type RepairResult = JsonRecord;
+type SheetKind = "code" | "repair" | "analysis" | null;
+type ConsentAction = "chat" | "repair" | "analyze";
 type DragOpts = {
   els: HTMLElement[];
   axis: "x" | "y";
@@ -57,108 +93,171 @@ type DragOpts = {
   set: (v: number) => void;
   min: number;
   max: number;
-  start?: (e: PointerEvent) => boolean;
+  start?: () => boolean;
   onTap?: (el: HTMLElement) => void;
   onEnd: (v: number) => void;
 };
 
-const ACTS: Record<ActKey, Act> = {
-  all: {
-    title: "Analyze complete",
-    sub: "A full pass across every file",
-    Icon: ScanSearch,
-    steps: [
-      "Indexing files",
-      "Mapping modules and entry points",
-      "Checking dependencies and code health",
-    ],
-    head: "Scan complete. Three things are worth a look.",
-    rows: [
-      ["med", "2 outdated dependencies to update"],
-      ["low", "1 file over 800 lines, a candidate to split"],
-      ["info", "Core modules have no test coverage yet"],
-    ],
-  },
-  vuln: {
-    title: "Find vulnerabilities",
-    sub: "Security issues and risky dependencies",
-    Icon: ShieldAlert,
-    steps: [
-      "Scanning for exposed secrets",
-      "Auditing dependency versions",
-      "Reviewing input handling",
-    ],
-    head: "Security review found 6 issues.",
-    rows: [
-      ["high", "Possible hard-coded credential in a config file"],
-      ["med", "Dependency with a known advisory"],
-      ["med", "Request body used without validation"],
-      ["low", "3 minor hardening suggestions"],
-    ],
-  },
-  tree: {
-    title: "Analyze structure",
-    sub: "Architecture, modules and data flow",
-    Icon: Network,
-    steps: [
-      "Reading folder layout",
-      "Tracing imports between modules",
-      "Drawing the architecture",
-    ],
-    head: "Structure analysis is not connected yet.",
-    rows: [
-      ["info", "Connect a real repository scanner before using this feature."],
-    ],
-  },
-  readiness: {
-    title: "Production readiness",
-    sub: "Score security and show categories without evidence",
-    Icon: CheckCircle2,
-    steps: [
-      "Running available code scanners",
-      "Checking readiness evidence",
-      "Calculating the provisional score",
-    ],
-    head: "Production readiness assessment",
-    rows: [],
-  },
+/* ------------------------------------------------------------------ */
+/*  Helpers (API + data)                                               */
+/* ------------------------------------------------------------------ */
+const DevMindIcon = ({
+  size = 16,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) => <Sparkles size={size} className={className} />;
+/* The backend exposes one assistant, so the model menu has one entry.
+   "Answer depth" is real: it is added to the prompt as an instruction. */
+const DEPTH_NOTE: Record<string, string> = {
+  low: "Answer concisely in a few sentences.",
+  medium: "Give a clear, balanced answer with the key details.",
+  high: "Be thorough: reason step by step and cite specific file paths from the evidence.",
 };
-
-const REPOS: [string, string][] = [
-  ["devmind-api", "Demo repository picker (not connected to GitHub API)"],
-  ["devmind-web", "Demo repository picker (not connected to GitHub API)"],
-  ["infra-config", "Demo repository picker (not connected to GitHub API)"],
+const DEVMIND_MODELS: AIModel[] = [
+  {
+    id: "devmind",
+    name: "DevMind AI",
+    provider: "Codebase assistant",
+    tag: "Code",
+    icon: DevMindIcon,
+    badgeColor: "text-lime-500",
+    accentColor: "#76B900",
+    reasoningTitle: "Answer depth",
+    defaultLevel: "medium",
+    levels: [
+      {
+        id: "low",
+        label: "Quick",
+        desc: "Short, direct answers",
+        multiplier: 1.6,
+      },
+      {
+        id: "medium",
+        label: "Balanced",
+        desc: "Clear answers with the key details",
+        multiplier: 2.6,
+      },
+      {
+        id: "high",
+        label: "Thorough",
+        desc: "Step-by-step answers that cite file paths",
+        multiplier: 3.8,
+      },
+    ],
+  },
 ];
+const uid = () =>
+  Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ??
-  "http://localhost:5001";
-
-/* sample file tree shown for any project (replace with your real listing) */
-const mkTree = (root: string): TNode => ({
-  name: root,
-  kids: [
-    {
-      name: "src",
-      kids: [
-        { name: "app.ts" },
-        { name: "server.ts" },
-        { name: "routes", kids: [{ name: "auth.ts" }, { name: "users.ts" }] },
-        {
-          name: "services",
-          kids: [{ name: "user.service.ts" }, { name: "billing.service.ts" }],
-        },
-        { name: "models", kids: [{ name: "user.ts" }] },
-      ],
+function asRecord(value: unknown): JsonRecord {
+  return value && typeof value === "object" ? (value as JsonRecord) : {};
+}
+function asString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+function unwrapArray<T>(payload: unknown, keys: string[]): T[] {
+  if (Array.isArray(payload)) return payload as T[];
+  const record = asRecord(payload);
+  for (const key of keys) {
+    if (Array.isArray(record[key])) return record[key] as T[];
+  }
+  if (Array.isArray(record.data)) return record.data as T[];
+  const data = asRecord(record.data);
+  for (const key of keys) {
+    if (Array.isArray(data[key])) return data[key] as T[];
+  }
+  return [];
+}
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    credentials: "include",
+    ...init,
+    headers: {
+      ...(init.body ? { "Content-Type": "application/json" } : {}),
+      ...init.headers,
     },
-    { name: "tests", kids: [{ name: "auth.test.ts" }] },
-    { name: "Dockerfile" },
-    { name: "package.json" },
-    { name: "README.md" },
-  ],
-});
+  });
+  const raw = await response.text();
+  let payload: unknown = null;
+  if (raw) {
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = raw;
+    }
+  }
+  if (!response.ok) {
+    const record = asRecord(payload);
+    const message = asString(
+      record.message,
+      asString(
+        record.error,
+        typeof payload === "string" ? payload : response.statusText,
+      ),
+    );
+    throw new Error(
+      `${response.status} ${response.statusText}${message ? ` — ${message}` : ""}`,
+    );
+  }
+  return payload as T;
+}
+const isDirectory = (entry: GithubEntry) => entry.type === "dir";
 
-/* ---------- motion: springs described by response + damping ratio ---------- */
+/* Sort by depth first so a parent folder is always indexed before its children. */
+function buildTree(entries: GithubEntry[]): TreeNode[] {
+  const root: TreeNode[] = [];
+  const index = new Map<string, TreeNode>();
+  const depth = (p: string) => p.split("/").length;
+  const sorted = [...entries].sort((a, b) => {
+    const ad = isDirectory(a) ? 0 : 1,
+      bd = isDirectory(b) ? 0 : 1;
+    return (
+      depth(a.path) - depth(b.path) || ad - bd || a.name.localeCompare(b.name)
+    );
+  });
+  for (const entry of sorted) {
+    const node: TreeNode = {
+      ...entry,
+      children: isDirectory(entry) ? [] : undefined,
+    };
+    index.set(entry.path, node);
+    const parent = index.get(entry.path.split("/").slice(0, -1).join("/"));
+    if (parent?.children) parent.children.push(node);
+    else root.push(node);
+  }
+  return root;
+}
+function getFileIcon(name: string) {
+  if (/\.json$/i.test(name)) return FileJson;
+  if (/\.(tsx?|jsx?|py|go|rs|java|c|cpp|sql|sh|yml|yaml)$/i.test(name))
+    return FileCode2;
+  if (/\.md$/i.test(name)) return FileText;
+  return File;
+}
+function decodeContent(entry: GithubEntry): string {
+  const plain = entry.decodedContent ?? entry.text;
+  if (typeof plain === "string") return plain;
+  if (typeof entry.content === "string") {
+    if (entry.encoding === "base64") {
+      const bin = atob(entry.content.replace(/\n/g, ""));
+      try {
+        return new TextDecoder().decode(
+          Uint8Array.from(bin, (c) => c.charCodeAt(0)),
+        );
+      } catch {
+        return bin;
+      }
+    }
+    return entry.content;
+  }
+  return "";
+}
+
+/* ------------------------------------------------------------------ */
+/*  Motion: springs (response + damping ratio) and axis-locked drag     */
+/* ------------------------------------------------------------------ */
 const raf: Record<string, number> = {};
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -168,7 +267,7 @@ function spring(
   to: number,
   v0: number,
   set: (v: number) => void,
-  r = 0.34,
+  r = 0.36,
   z = 1,
 ) {
   cancelAnimationFrame(raf[key]);
@@ -195,7 +294,7 @@ function spring(
   raf[key] = requestAnimationFrame(step);
 }
 
-/* 1-axis drag: 10px hysteresis, 1:1 tracking, rubber-band, velocity on release */
+/* 10px hysteresis, 1:1 tracking, rubber-band at the edges, velocity on release */
 function attachDrag({
   els,
   axis,
@@ -207,19 +306,19 @@ function attachDrag({
   onTap,
   onEnd,
 }: DragOpts) {
-  type G = {
+  type S = {
     x0: number;
     y0: number;
     base: number;
     on: boolean;
     el: HTMLElement;
   };
-  let g: G | null = null;
+  let g: S | null = null;
   let h: [number, number][] = [];
   const X = axis === "x";
   const down = (ev: Event) => {
     const e = ev as PointerEvent;
-    if (start && !start(e)) return;
+    if (start && !start()) return;
     cancelAnimationFrame(raf[axis]);
     g = {
       x0: e.clientX,
@@ -283,76 +382,112 @@ function attachDrag({
   };
 }
 
-/* ------------------------------ file tree ------------------------------ */
-function Tree({
+/* ------------------------------------------------------------------ */
+/*  Small components                                                   */
+/* ------------------------------------------------------------------ */
+function Spin({ size = 16 }: { size?: number }) {
+  return <LoaderCircle size={size} className="dm-spin" />;
+}
+function Orb({ size = 30 }: { size?: number }) {
+  return (
+    <span className="dm-orb" style={{ width: size, height: size }}>
+      <Sparkles size={Math.round(size * 0.52)} strokeWidth={2.2} />
+    </span>
+  );
+}
+/* Renders ``` fenced blocks as code, everything else as paragraphs */
+function Rich({ text }: { text: string }): ReactNode {
+  const bits = text.split(/```[\w-]*\n?([\s\S]*?)```/g);
+  return (
+    <>
+      {bits.map((b, i) =>
+        i % 2 ? (
+          <pre key={i} className="dm-codeblock">
+            <code>{b.replace(/\n$/, "")}</code>
+          </pre>
+        ) : b.trim() ? (
+          <p key={i}>{b.trim()}</p>
+        ) : null,
+      )}
+    </>
+  );
+}
+function Finding({ f }: { f: unknown }) {
+  const r = asRecord(f);
+  const sev = asString(r.severity, asString(r.level, asString(r.type)));
+  const msg = asString(r.message, asString(r.description, asString(r.title)));
+  const line = r.line != null ? `Line ${String(r.line)}` : "";
+  const rule = asString(r.rule, asString(r.rule_id, asString(r.id)));
+  if (!msg)
+    return <pre className="dm-repair">{JSON.stringify(f, null, 2)}</pre>;
+  return (
+    <div className="dm-finding">
+      <div className="dm-find-top">
+        {sev && <span className={`dm-sev ${sev.toLowerCase()}`}>{sev}</span>}
+        {line && <span>{line}</span>}
+        {rule && <span className="dm-find-rule">{rule}</span>}
+      </div>
+      <p>{msg}</p>
+    </div>
+  );
+}
+function TreeItems({
   nodes,
-  base,
   depth,
-  open,
-  toggle,
-  pick,
-  sel,
+  selected,
+  expanded,
+  onToggle,
+  onSelect,
 }: {
-  nodes: TNode[];
-  base: string;
+  nodes: TreeNode[];
   depth: number;
-  open: Record<string, boolean>;
-  toggle: (p: string) => void;
-  pick: (p: string) => void;
-  sel: string | null;
+  selected: string;
+  expanded: Set<string>;
+  onToggle: (path: string) => void;
+  onSelect: (entry: TreeNode) => void;
 }) {
   return (
     <>
-      {nodes.map((n) => {
-        const p = base + "/" + n.name,
-          isOpen = !!open[p],
-          on = sel === p;
-        const FileIcon = /\.(ts|tsx|js|jsx|py|go|rs)$/.test(n.name)
-          ? FileCode
-          : FileText;
+      {nodes.map((node) => {
+        const directory = isDirectory(node),
+          open = expanded.has(node.path),
+          active = selected === node.path;
+        const Icon = directory
+          ? open
+            ? FolderOpen
+            : Folder
+          : getFileIcon(node.name);
         return (
-          <div key={p}>
+          <div key={node.path}>
             <button
-              onClick={() => (n.kids ? toggle(p) : pick(p))}
-              className={`dm-press dm-hv flex w-full items-center gap-2 rounded-lg py-1.5 pr-2 text-sm ${on ? "bg-white/10" : ""}`}
-              style={{ paddingLeft: 8 + depth * 14, color: on ? G : undefined }}
+              type="button"
+              title={node.path}
+              className={`dm-tree-item dm-press ${active ? "is-selected" : ""}`}
+              style={{ paddingLeft: 12 + depth * 16 }}
+              onClick={() => (directory ? onToggle(node.path) : onSelect(node))}
             >
-              {n.kids ? (
+              {directory ? (
                 <ChevronRight
                   size={14}
-                  className={`flex-none text-zinc-500 transition-transform ${isOpen ? "rotate-90" : ""}`}
+                  className={`dm-chev ${open ? "open" : ""}`}
                 />
               ) : (
-                <span className="w-3.5 flex-none" />
+                <span className="dm-chev-gap" />
               )}
-              {n.kids ? (
-                isOpen ? (
-                  <FolderOpen
-                    size={16}
-                    style={{ color: G }}
-                    className="flex-none"
-                  />
-                ) : (
-                  <Folder
-                    size={16}
-                    style={{ color: G }}
-                    className="flex-none"
-                  />
-                )
-              ) : (
-                <FileIcon size={16} className="flex-none text-zinc-400" />
-              )}
-              <span className="truncate">{n.name}</span>
+              <Icon
+                size={17}
+                className={directory ? "dm-ic-dir" : "dm-ic-file"}
+              />
+              <span className="dm-truncate">{node.name}</span>
             </button>
-            {n.kids && isOpen && (
-              <Tree
-                nodes={n.kids}
-                base={p}
+            {directory && open && node.children && node.children.length > 0 && (
+              <TreeItems
+                nodes={node.children}
                 depth={depth + 1}
-                open={open}
-                toggle={toggle}
-                pick={pick}
-                sel={sel}
+                selected={selected}
+                expanded={expanded}
+                onToggle={onToggle}
+                onSelect={onSelect}
               />
             )}
           </div>
@@ -362,128 +497,130 @@ function Tree({
   );
 }
 
-function Spin({ size = 16 }: { size?: number }) {
-  return (
-    <div
-      className="animate-spin flex-none rounded-full border-2 border-white/15"
-      style={{ width: size, height: size, borderTopColor: G }}
-    />
-  );
-}
-
-function Orb({ size = 28 }: { size?: number }) {
-  return (
-    <div
-      className="grid flex-none place-items-center rounded-full text-black"
-      style={{ width: size, height: size, background: G }}
-    >
-      <Sparkles size={Math.round(size * 0.55)} strokeWidth={2.2} />
-    </div>
-  );
-}
-
-/* ------------------------------ component ------------------------------ */
+/* ------------------------------------------------------------------ */
+/*  Page                                                               */
+/* ------------------------------------------------------------------ */
 export default function DevMind() {
-  const [project, setProject] = useState<Project | null>(null);
-  const [msgs, setMsgs] = useState<Msg[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [text, setText] = useState("");
-  const [sourceCode, setSourceCode] = useState(
-    "def add(a, b):\\n    return a + b\\n",
+  const [status, setStatus] = useState<GithubStatus>({ connected: false });
+  const [repos, setRepos] = useState<GithubRepo[]>([]);
+  const [repo, setRepo] = useState<GithubRepo | null>(null);
+  const [branches, setBranches] = useState<GithubBranch[]>([]);
+  const [branch, setBranch] = useState("main");
+  const [entries, setEntries] = useState<GithubEntry[]>([]);
+  const [selectedFile, setSelectedFile] = useState<GithubEntry | null>(null);
+  const [sourceCode, setSourceCode] = useState("");
+  const [chat, setChat] = useState<ChatMessage[]>([]);
+  const [prompt, setPrompt] = useState("");
+  const [repoSearch, setRepoSearch] = useState("");
+  const [fileSearch, setFileSearch] = useState("");
+  const [loadingStatus, setLoadingStatus] = useState(true);
+  const [loadingRepos, setLoadingRepos] = useState(false);
+  const [loadingFiles, setLoadingFiles] = useState(false);
+  const [loadingFile, setLoadingFile] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [repairing, setRepairing] = useState(false);
+  const [repairResult, setRepairResult] = useState<RepairResult | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<JsonRecord | null>(null);
+  const [consentOpen, setConsentOpen] = useState(false);
+  const [consentKey, setConsentKey] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<ConsentAction | null>(
+    null,
   );
-  const [toast, setToast] = useState("");
-  const [bell, setBell] = useState(true);
-  const [sheetView, setSheetView] = useState<SheetView>(null);
-  const [nudge, setNudge] = useState(0);
-  const [open, setOpen] = useState<Record<string, boolean>>({});
-  const [focus, setFocus] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [sheet, setSheet] = useState<SheetKind>(null);
+  const [filesOpen, setFilesOpen] = useState(true);
+  const [kb, setKb] = useState(false);
 
   const dR = useRef<HTMLElement>(null),
-    scR = useRef<HTMLDivElement>(null),
-    eR = useRef<HTMLDivElement>(null);
+    dscR = useRef<HTMLDivElement>(null);
   const shR = useRef<HTMLDivElement>(null),
-    swR = useRef<HTMLDivElement>(null),
-    sc2R = useRef<HTMLDivElement>(null);
-  const grR = useRef<HTMLDivElement>(null),
-    scrollR = useRef<HTMLDivElement>(null);
-  const fileR = useRef<HTMLInputElement>(null),
-    taR = useRef<HTMLTextAreaElement>(null);
+    swR = useRef<HTMLDivElement>(null);
+  const sscR = useRef<HTMLDivElement>(null),
+    grR = useRef<HTMLDivElement>(null);
+  const threadR = useRef<HTMLDivElement>(null);
+  const effortRef = useRef("medium");
+  const autoOpened = useRef(false);
+  const pendingMessage = useRef("");
   const api = useRef<{
     drawer: (o: boolean, v?: number) => void;
     sheet: (o: boolean, v?: number) => void;
-    showSheet: () => void;
+    show: () => void;
   }>({
     drawer: () => {},
     sheet: () => {},
-    showSheet: () => {},
+    show: () => {},
   });
-  const tt = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const prevLen = useRef(0);
 
-  /* drawer + sheet physics (refs, so dragging never re-renders React) */
+  const notify = useCallback(
+    (text: string, type: Notice["type"] = "info") => setNotice({ text, type }),
+    [],
+  );
+  const openSheet = (kind: Exclude<SheetKind, null>) => {
+    setSheet(kind);
+    api.current.show();
+  };
+  const closeSheet = () => api.current.sheet(false);
+
+  /* ---------- platform: drawer + sheet physics, keyboard-aware height ---------- */
   useEffect(() => {
     const d = dR.current!,
-      sc = scR.current!,
-      e = eR.current!,
+      dsc = dscR.current!,
       sh = shR.current!,
       sw = swR.current!,
-      sc2 = sc2R.current!,
+      ssc = sscR.current!,
       gr = grR.current!;
-    const wide = () => matchMedia("(min-width: 1024px)").matches;
-    const W = () => Math.min(innerWidth * 0.86, 320);
-    const H = () => sh.offsetHeight || 420;
+    const W = () => Math.min(innerWidth * 0.86, 340);
+    const H = () => sh.offsetHeight || 480;
+    const clamp = (n: number) => Math.max(0, Math.min(1, n));
     let dx = -W(),
       dOpen = false,
-      sy = H();
+      sy = 9999;
 
     const setD = (v: number) => {
       dx = v;
-      if (wide()) {
-        d.style.transform = "";
-        return;
-      }
       d.style.transform = `translate3d(${v}px,0,0)`;
-      const p = Math.max(0, Math.min(1, 1 + v / W()));
-      sc.style.opacity = String(p);
-      sc.style.pointerEvents = p > 0.01 ? "auto" : "none";
+      const p = clamp(1 + v / W());
+      dsc.style.opacity = String(p);
+      dsc.style.pointerEvents = p > 0.01 ? "auto" : "none";
     };
     const setS = (v: number) => {
       sy = v;
       sh.style.transform = `translate3d(0,${v}px,0)`;
-      sc2.style.opacity = String(Math.max(0, Math.min(1, 1 - v / H())));
+      ssc.style.opacity = String(clamp(1 - v / H()));
     };
     const drawer = (o: boolean, v = 0) => {
       dOpen = o;
-      spring("x", dx, o ? 0 : -W(), v, setD);
+      spring("x", dx, o ? 0 : -W(), v, setD, 0.34);
     };
-    const sheet = (o: boolean, v = 0) => {
+    const sheetTo = (o: boolean, v = 0) => {
       sw.style.pointerEvents = o ? "auto" : "none";
-      spring("y", sy, o ? 0 : H(), v, setS, 0.36, 1);
+      spring("y", sy, o ? 0 : H(), v, setS);
     };
     setD(-W());
-    setS(H());
     api.current = {
       drawer,
-      sheet,
-      showSheet: () =>
+      sheet: sheetTo,
+      show: () =>
         requestAnimationFrame(() =>
           requestAnimationFrame(() => {
             setS(H());
-            sheet(true);
+            sheetTo(true);
           }),
         ),
     };
 
     const c1 = attachDrag({
-      els: [e, d, sc],
+      els: [d, dsc],
       axis: "x",
       get: () => dx,
       set: setD,
       min: -W(),
       max: 0,
-      start: (ev) => !wide() && (dOpen || ev.currentTarget === e),
+      start: () => dOpen,
       onTap: (el) => {
-        if (el === sc) drawer(false);
+        if (el === dsc) drawer(false);
       },
       onEnd: (v) => drawer(dx + v * 0.499 > -W() / 2, v), // project momentum, then snap
     });
@@ -494,1026 +631,1636 @@ export default function DevMind() {
       set: setS,
       min: 0,
       max: 1e4,
-      onEnd: (v) => sheet(!(sy + v * 0.499 > H() / 2), v),
+      onEnd: (v) => sheetTo(!(sy + v * 0.499 > H() / 2), v),
     });
-    const rs = () => {
-      if (wide()) {
-        d.style.transform = "";
-        sc.style.opacity = "0";
-        sc.style.pointerEvents = "none";
-      } else setD(dOpen ? 0 : -W());
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        sheetTo(false);
+        drawer(false);
+      }
     };
-    addEventListener("resize", rs);
+    addEventListener("keydown", key);
     return () => {
       c1();
       c2();
-      removeEventListener("resize", rs);
+      removeEventListener("keydown", key);
     };
   }, []);
 
   useEffect(() => {
-    const t = taR.current;
-    if (!t) return;
-    t.style.height = "auto";
-    t.style.height = Math.min(t.scrollHeight, 120) + "px";
-  }, [text]);
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const fit = () => {
+      document.documentElement.style.setProperty("--dm-vh", `${vv.height}px`);
+      setKb(vv.height < window.innerHeight * 0.75);
+      if (vv.offsetTop) window.scrollTo(0, 0);
+    };
+    fit();
+    vv.addEventListener("resize", fit);
+    vv.addEventListener("scroll", fit);
+    return () => {
+      vv.removeEventListener("resize", fit);
+      vv.removeEventListener("scroll", fit);
+    };
+  }, []);
 
   useEffect(() => {
-    const s = scrollR.current;
-    if (s && msgs.length)
-      s.scrollTo({
-        top: s.scrollHeight,
-        behavior:
-          reduced() || msgs.length === prevLen.current ? "auto" : "smooth",
-      });
-    prevLen.current = msgs.length;
-  }, [msgs]);
-
-  const say = (m: string) => {
-    setToast(m);
-    clearTimeout(tt.current);
-    tt.current = setTimeout(() => setToast(""), 2200);
-  };
-
-  const load = (kind: "gh" | "zip", name: string, meta: string) => {
-    const root =
-      kind === "gh" ? name.split("/")[1] : name.replace(/\.zip$/i, "");
-    setProject({ kind, name, meta, root });
-    setOpen({ ["/" + root]: true, ["/" + root + "/src"]: true });
-    setMsgs([]);
-    setBusy(false);
-    setFocus(null);
-    scrollR.current?.scrollTo({ top: 0 });
-    api.current.drawer(false);
-  };
-
-  /* onboarding */
-  const onFile = (e: ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    const mb = f.size / 1048576;
-    load(
-      "zip",
-      f.name,
-      (mb < 0.1 ? (f.size / 1024).toFixed(0) + " KB" : mb.toFixed(1) + " MB") +
-        ", zip archive",
+    if (!notice) return;
+    const t = setTimeout(
+      () => setNotice(null),
+      notice.type === "error" ? 7000 : 3800,
     );
-    say("File uploaded");
-    e.target.value = "";
-  };
-  const connect = () => {
-    setSheetView("auth");
-    api.current.showSheet();
-  };
-  const authorize = () => {
-    setSheetView("wait");
-    setTimeout(() => setSheetView("repos"), 1000);
-  };
-  const pickRepo = ([n, m]: [string, string]) => {
-    api.current.sheet(false);
-    setTimeout(() => {
-      load("gh", "alanbabu/" + n, m);
-      say("Repository connected");
-    }, 180);
-  };
-  const showFiles = () => {
-    setSheetView("files");
-    api.current.showSheet();
-  };
-  const toggle = (p: string) => setOpen((o) => ({ ...o, [p]: !o[p] }));
-  const pickFile = (p: string) => {
-    setFocus(p.slice(1));
-    say("Added to chat");
-    api.current.sheet(false);
-    api.current.drawer(false);
-    setTimeout(() => taR.current?.focus(), 250);
-  };
+    return () => clearTimeout(t);
+  }, [notice]);
 
-  /* chat + analysis */
-  const used = msgs
-    .filter((m): m is Extract<Msg, { t: "run" }> => m.t === "run")
-    .map((m) => m.k);
-  const left = (Object.keys(ACTS) as ActKey[]).filter((k) => !used.includes(k));
+  useEffect(() => {
+    const t = threadR.current;
+    if (t)
+      t.scrollTo({
+        top: t.scrollHeight,
+        behavior: reduced() ? "auto" : "smooth",
+      });
+  }, [chat, sending]);
 
-  const run = async (k: ActKey) => {
-    if (busy) return;
-
-    if (k === "tree") {
-      say("Structure analysis is not connected yet");
-      return;
-    }
-
-    const code = sourceCode.trim();
-    if (!code) {
-      say("Paste Python source code before running an analysis");
-      return;
-    }
-    if (code.length > 20000) {
-      say("Source code must be 20000 characters or fewer");
-      return;
-    }
-
-    setBusy(true);
-    const id = Date.now();
-    const messageId = id + 1;
-    const endpoint =
-      k === "readiness" ? "/api/ai/readiness" : "/api/ai/analyze";
-
-    setMsgs((m) => [
-      ...m,
-      { id, t: "u", text: ACTS[k].title },
-      { id: messageId, t: "run", k, step: 0, done: false },
-    ]);
-
+  /* ---------- data: GitHub status, repos, branches, files ---------- */
+  const loadStatus = useCallback(async () => {
+    setLoadingStatus(true);
     try {
-      setMsgs((m) =>
-        m.map((x) =>
-          x.t === "run" && x.id === messageId ? { ...x, step: 1 } : x,
-        ),
+      const payload = asRecord(await request<unknown>("/api/github/status"));
+      const nested = asRecord(payload.data);
+      const connected = Boolean(
+        payload.connected ??
+        nested.connected ??
+        payload.isConnected ??
+        nested.isConnected,
       );
-
-      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          language: "python",
-          filename: "submitted.py",
-          source_code: code,
-        }),
+      setStatus({
+        connected,
+        username: asString(
+          payload.username,
+          asString(
+            payload.login,
+            asString(nested.username, asString(nested.login)),
+          ),
+        ),
+        login: asString(payload.login, asString(nested.login)),
+        avatar_url: asString(
+          payload.avatar_url,
+          asString(
+            payload.avatarUrl,
+            asString(nested.avatar_url, asString(nested.avatarUrl)),
+          ),
+        ),
+        avatarUrl: asString(payload.avatarUrl, asString(nested.avatarUrl)),
       });
-
-      const payload: unknown = await response.json().catch(() => null);
-      if (!response.ok) {
-        const detail =
-          payload && typeof payload === "object"
-            ? String(
-                (payload as Record<string, unknown>).detail ??
-                  (payload as Record<string, unknown>).error ??
-                  `Request failed (${response.status})`,
-              )
-            : `Request failed (${response.status})`;
-        throw new Error(detail);
-      }
-
-      const result =
-        payload && typeof payload === "object"
-          ? (payload as Record<string, unknown>)
-          : { response: payload };
-
-      setMsgs((m) =>
-        m.map((x) =>
-          x.t === "run" && x.id === messageId
-            ? { ...x, step: ACTS[k].steps.length, done: true, result }
-            : x,
-        ),
-      );
     } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Unable to reach the DevMind API Gateway";
-      setMsgs((m) =>
-        m.map((x) =>
-          x.t === "run" && x.id === messageId
-            ? { ...x, done: true, error: message }
-            : x,
-        ),
+      setStatus({ connected: false });
+      notify(
+        `GitHub status could not be loaded. Check the gateway route and API URL. ${error instanceof Error ? error.message : ""}`.trim(),
+        "error",
       );
-      say("Analysis request failed");
     } finally {
-      setBusy(false);
+      setLoadingStatus(false);
+    }
+  }, [notify]);
+
+  const loadRepos = useCallback(async () => {
+    setLoadingRepos(true);
+    try {
+      const payload = await request<unknown>(
+        "/api/github/repos?page=1&sort=updated",
+      );
+      const list = unwrapArray<GithubRepo>(payload, [
+        "repos",
+        "items",
+        "data",
+      ]).map((item) => {
+        const fullName =
+          (typeof item.full_name === "string" && item.full_name.trim()) ||
+          (typeof item.fullName === "string" && item.fullName.trim()) ||
+          "";
+        const fallbackName =
+          item.name ||
+          fullName.split("/").filter(Boolean).pop() ||
+          "Repository";
+        return {
+          ...item,
+          id: item.id ?? fullName ?? fallbackName,
+          name: fallbackName,
+          // The gateway returns fullName (camelCase); the UI uses full_name for API paths.
+          full_name: fullName || fallbackName,
+          default_branch: item.default_branch ?? item.defaultBranch ?? "main",
+          updated_at: item.updated_at ?? item.updatedAt,
+          html_url: item.html_url ?? item.url,
+        };
+      });
+      setRepos(list);
+      if (!list.length)
+        notify(
+          "GitHub is connected, but no repositories were returned for this account.",
+          "info",
+        );
+    } catch (error) {
+      notify(
+        `Could not load repositories. ${error instanceof Error ? error.message : ""}`,
+        "error",
+      );
+    } finally {
+      setLoadingRepos(false);
+    }
+  }, [notify]);
+
+  useEffect(() => {
+    if (status.connected) void loadRepos();
+  }, [status.connected, loadRepos]);
+
+  /* first time after connecting with nothing imported yet: show the repository drawer */
+  useEffect(() => {
+    if (status.connected && repos.length && !repo && !autoOpened.current) {
+      autoOpened.current = true;
+      api.current.drawer(true);
+    }
+  }, [status.connected, repos, repo]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const githubResult = params.get("github");
+    if (githubResult === "success")
+      notify("GitHub connected successfully.", "success");
+    if (githubResult === "error")
+      notify(params.get("message") || "GitHub connection failed.", "error");
+    if (githubResult)
+      window.history.replaceState({}, "", window.location.pathname); // don't re-toast on refresh
+    void loadStatus();
+  }, [loadStatus, notify]);
+
+  const connectGithub = () => {
+    window.location.assign(`${API_BASE_URL}/api/github/connect`);
+  };
+
+  const disconnectGithub = async () => {
+    try {
+      await request<unknown>("/api/github/connect", { method: "DELETE" });
+      setStatus({ connected: false });
+      setRepos([]);
+      setRepo(null);
+      setBranches([]);
+      setEntries([]);
+      setSelectedFile(null);
+      setSourceCode("");
+      setChat([]);
+      setRepairResult(null);
+      setAnalysisResult(null);
+      setConsentKey(null);
+      setConsentOpen(false);
+      setPendingAction(null);
+      autoOpened.current = false;
+      closeSheet();
+      api.current.drawer(false);
+      notify("GitHub disconnected.", "success");
+    } catch (error) {
+      notify(
+        `Could not disconnect GitHub. ${error instanceof Error ? error.message : ""}`,
+        "error",
+      );
     }
   };
 
-  const answer = (t: string, f: string | null) => {
-    const where = f ? `In ${f}, ` : "Across the project, ";
-    if (/vuln|secur|secret|auth|token/i.test(t))
-      return (
-        where +
-        "the first things I would check are credentials, token handling and unvalidated input. Run Find vulnerabilities for a full pass."
-      );
-    if (/struct|arch|folder|layout|module/i.test(t))
-      return (
-        where +
-        "I would start at the entry layer and follow the imports down into services and models. Run Analyze structure for the full map."
-      );
-    return (
-      where +
-      "I can walk through what the code does, how it connects to the rest of the project and what I would improve. Ask about a specific function, or run one of the analyses below."
-    );
-  };
+  const loadContents = useCallback(
+    async (target: GithubRepo, targetBranch: string, path = "") => {
+      setLoadingFiles(true);
+      try {
+        const encoded = target.full_name
+          .split("/")
+          .map(encodeURIComponent)
+          .join("/");
+        const query = new URLSearchParams({ ref: targetBranch });
+        if (path) query.set("path", path);
+        const payload = await request<unknown>(
+          `/api/github/repos/${encoded}/contents?${query.toString()}`,
+        );
+        const list = unwrapArray<GithubEntry>(payload, [
+          "contents",
+          "files",
+          "items",
+          "data",
+        ]);
+        const normalized = list.map(
+          (entry) =>
+            ({
+              ...entry,
+              path: entry.path || (path ? `${path}/${entry.name}` : entry.name),
+            }) as GithubEntry,
+        );
+        setEntries((current) => {
+          if (!path) return normalized;
+          const byPath = new Map(current.map((e) => [e.path, e]));
+          normalized.forEach((e) => byPath.set(e.path, e));
+          return [...byPath.values()];
+        });
+        if (path) setExpanded((current) => new Set(current).add(path));
+        else setExpanded(new Set());
+      } catch (error) {
+        setEntries([]);
+        notify(
+          `Could not load repository files. ${error instanceof Error ? error.message : ""}`,
+          "error",
+        );
+      } finally {
+        setLoadingFiles(false);
+      }
+    },
+    [notify],
+  );
 
-  const send = () => {
-    const t = text.trim();
-    if (!t || busy) return;
-    if (!project) {
-      say("Connect GitHub or upload a zip first");
-      setNudge((n) => n + 1);
+  const chooseRepo = async (item: GithubRepo) => {
+    const fullName = item.full_name?.trim();
+    if (!fullName || fullName.split("/").length !== 2) {
+      notify(
+        `Cannot open this repository because the API did not return its owner/repository name. Received: ${fullName || "empty"}`,
+        "error",
+      );
       return;
     }
-    setText("");
-    setBusy(true);
-    const id = Date.now(),
-      words = answer(t, focus).split(" ");
-    setMsgs((m) => [
-      ...m,
-      { id, t: "u", text: t },
-      { id: id + 1, t: "a", text: null, done: false },
-    ]);
-    setTimeout(() => {
-      let i = 0;
-      const iv = setInterval(
-        () => {
-          i++;
-          setMsgs((m) =>
-            m.map((x) =>
-              x.t === "a" && x.id === id + 1
-                ? {
-                    ...x,
-                    text: words.slice(0, i).join(" "),
-                    done: i >= words.length,
-                  }
-                : x,
+    const selectedRepo = { ...item, full_name: fullName };
+    setRepo(selectedRepo);
+    setSelectedFile(null);
+    setSourceCode("");
+    setRepairResult(null);
+    setChat([]);
+    setAnalysisResult(null);
+    setConsentKey(null);
+    setConsentOpen(false);
+    setPendingAction(null);
+    setEntries([]);
+    setExpanded(new Set());
+    setFileSearch("");
+    setFilesOpen(true);
+    setBranch(selectedRepo.default_branch || "main");
+    closeSheet();
+    api.current.drawer(false);
+    setLoadingFiles(true);
+    try {
+      const encoded = selectedRepo.full_name
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/");
+      const payload = await request<unknown>(
+        `/api/github/repos/${encoded}/branches`,
+      );
+      const list = unwrapArray<GithubBranch>(payload, [
+        "branches",
+        "items",
+        "data",
+      ]).map((b) =>
+        typeof b === "string" ? ({ name: b } as GithubBranch) : b,
+      );
+      setBranches(list);
+      const defaultBranch = selectedRepo.default_branch || "main";
+      const chosen = list.some((b) => b.name === defaultBranch)
+        ? defaultBranch
+        : list[0]?.name || defaultBranch;
+      setBranch(chosen);
+      await loadContents(selectedRepo, chosen);
+    } catch (error) {
+      notify(
+        `Repository opened, but its branches could not be loaded. ${error instanceof Error ? error.message : ""}`,
+        "error",
+      );
+      setLoadingFiles(false);
+    }
+  };
+
+  const selectFile = async (entry: GithubEntry) => {
+    if (!repo) return;
+    setSelectedFile(entry);
+    setLoadingFile(true);
+    setRepairResult(null);
+    setAnalysisResult(null);
+    openSheet("code"); // keeps the two-panel layout exactly as sketched
+    try {
+      const encoded = repo.full_name
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/");
+      const query = new URLSearchParams({ ref: branch, path: entry.path });
+      const payload = await request<unknown>(
+        `/api/github/repos/${encoded}/contents?${query.toString()}`,
+      );
+      const record = asRecord(payload);
+      const nested = asRecord(record.data);
+      const file = (
+        record.content ? record : nested.content ? nested : entry
+      ) as GithubEntry;
+      const content = decodeContent(file);
+      if (!content && !file.content && !file.text && !file.decodedContent)
+        throw new Error("The API did not return file contents for this path.");
+      setSourceCode(content);
+    } catch (error) {
+      setSourceCode("");
+      notify(
+        `Could not read ${entry.path}. ${error instanceof Error ? error.message : ""}`,
+        "error",
+      );
+    } finally {
+      setLoadingFile(false);
+    }
+  };
+
+  const toggleDirectory = (path: string) => {
+    const isOpen = expanded.has(path);
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (isOpen) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+    if (!isOpen && repo && !entries.some((e) => e.path.startsWith(`${path}/`)))
+      void loadContents(repo, branch, path);
+  };
+
+  const visibleRepos = useMemo(
+    () =>
+      repos.filter((r) =>
+        `${r.full_name} ${r.description ?? ""} ${r.language ?? ""}`
+          .toLowerCase()
+          .includes(repoSearch.toLowerCase()),
+      ),
+    [repos, repoSearch],
+  );
+  const visibleEntries = useMemo(
+    () =>
+      entries.filter((e) =>
+        `${e.path} ${e.name}`.toLowerCase().includes(fileSearch.toLowerCase()),
+      ),
+    [entries, fileSearch],
+  );
+  const tree = useMemo(() => buildTree(visibleEntries), [visibleEntries]);
+  const lineCount = sourceCode ? sourceCode.split("\n").length : 0;
+  const lineNumbers = useMemo(
+    () => Array.from({ length: lineCount }, (_, i) => i + 1).join("\n"),
+    [lineCount],
+  );
+  const isPython = Boolean(selectedFile?.name.toLowerCase().endsWith(".py"));
+
+  /* ---------- AI: chat, analysis and repair (read access is approved per repository + branch) ---------- */
+  const accessKey = repo ? `${repo.full_name}@${branch}` : "";
+  const needConsent = (action: ConsentAction) => {
+    if (!repo || consentKey === accessKey) return false;
+    setPendingAction(action);
+    setConsentOpen(true);
+    return true;
+  };
+  const allowAccess = () => {
+    const action = pendingAction;
+    setConsentKey(accessKey);
+    setConsentOpen(false);
+    setPendingAction(null);
+    if (action === "chat") void sendPrompt(pendingMessage.current, true);
+    if (action === "repair") void requestRepair(true);
+    if (action === "analyze") void analyzeSelectedFile(true);
+  };
+  const denyAccess = () => {
+    setConsentOpen(false);
+    setPendingAction(null);
+    notify("Repository access denied. No AI request was sent.", "info");
+  };
+
+  const fetchRepositoryContext = async (
+    targetRepo: GithubRepo,
+    targetBranch: string,
+  ) => {
+    const encoded = targetRepo.full_name
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/");
+    const ignored =
+      /(^|\/)(node_modules|vendor|dist|build|coverage|\.git|\.next|venv|\.venv)(\/|$)|(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|poetry\.lock|Cargo\.lock|composer\.lock|\.env(?:\..*)?)$/i;
+    const queue = [""];
+    const visited = new Set<string>();
+    const snippets: string[] = [];
+    let totalChars = 0;
+    const maxFiles = 30,
+      maxChars = 45000;
+
+    while (
+      queue.length &&
+      snippets.length < maxFiles &&
+      totalChars < maxChars
+    ) {
+      const path = queue.shift()!;
+      if (visited.has(path)) continue;
+      visited.add(path);
+      const query = new URLSearchParams({ ref: targetBranch });
+      if (path) query.set("path", path);
+      const payload = await request<unknown>(
+        `/api/github/repos/${encoded}/contents?${query.toString()}`,
+      );
+      const listing = unwrapArray<GithubEntry>(payload, [
+        "contents",
+        "files",
+        "items",
+        "data",
+      ]);
+      for (const rawEntry of listing) {
+        const entry = {
+          ...rawEntry,
+          path:
+            rawEntry.path ||
+            (path ? `${path}/${rawEntry.name}` : rawEntry.name),
+        } as GithubEntry;
+        if (!entry.path || ignored.test(entry.path)) continue;
+        if (entry.type === "dir") {
+          if (queue.length + visited.size < 120) queue.push(entry.path);
+          continue;
+        }
+        if (
+          entry.type !== "file" ||
+          snippets.length >= maxFiles ||
+          totalChars >= maxChars
+        )
+          continue;
+        const ext = entry.name.toLowerCase().split(".").pop() || "";
+        if (
+          !/^(py|js|jsx|mjs|cjs|ts|tsx|json|md|yml|yaml|toml|sql|go|java|rs|html|css|sh|dockerfile)$/.test(
+            ext,
+          ) &&
+          !/^dockerfile$/i.test(entry.name)
+        )
+          continue;
+        try {
+          const fileQuery = new URLSearchParams({
+            ref: targetBranch,
+            path: entry.path,
+          });
+          const filePayload = asRecord(
+            await request<unknown>(
+              `/api/github/repos/${encoded}/contents?${fileQuery.toString()}`,
             ),
           );
-          if (i >= words.length) {
-            clearInterval(iv);
-            setBusy(false);
-          }
-        },
-        reduced() ? 5 : 45,
-      );
-    }, 700);
-  };
-
-  const newChat = () => {
-    setMsgs([]);
-    setBusy(false);
-    setFocus(null);
-    setText("");
-    api.current.drawer(false);
-  };
-
-  const glass =
-    "dm-glass backdrop-blur-2xl backdrop-saturate-150 bg-white/10 border border-white/10";
-  const SrcIcon = project?.kind === "gh" ? Github : FileArchive;
-  const tree = project ? [mkTree(project.root)] : [];
-
-  const composer = (
-    <div
-      className={`dm-focus mx-auto w-full max-w-2xl rounded-3xl py-3 pl-5 pr-3 transition-shadow ${glass}`}
-    >
-      {focus && (
-        <div className="mb-2 flex">
-          <span
-            className="flex items-center gap-1.5 rounded-full py-1 pl-2.5 pr-1.5 text-xs font-medium"
-            style={{ background: G14, color: G, maxWidth: "100%" }}
-          >
-            <FileCode size={13} className="flex-none" />
-            <span className="truncate">{focus}</span>
-            <button
-              aria-label="Remove file"
-              onClick={() => setFocus(null)}
-              className="dm-press grid h-5 w-5 flex-none place-items-center rounded-full"
-            >
-              <X size={12} />
-            </button>
-          </span>
-        </div>
-      )}
-      <textarea
-        ref={taR}
-        rows={1}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        enterKeyHint="send"
-        onKeyDown={(e) => {
-          if (
-            e.key === "Enter" &&
-            !e.shiftKey &&
-            !matchMedia("(pointer: coarse)").matches
-          ) {
-            e.preventDefault();
-            send();
-          }
-        }}
-        placeholder={
-          project ? "Ask DevMind about this project…" : "Type something…"
+          const nested = asRecord(filePayload.data);
+          const file = (
+            typeof filePayload.content === "string"
+              ? filePayload
+              : typeof nested.content === "string"
+                ? nested
+                : entry
+          ) as GithubEntry;
+          const content = decodeContent(file);
+          if (!content.trim()) continue;
+          const clipped = content.slice(
+            0,
+            Math.min(3500, maxChars - totalChars),
+          );
+          snippets.push(`\n--- FILE: ${entry.path} ---\n${clipped}`);
+          totalChars += clipped.length;
+        } catch {
+          // Keep scanning other files if one file cannot be fetched.
         }
-        className="block w-full resize-none bg-transparent py-1 leading-snug text-white placeholder-zinc-500 outline-none"
+      }
+    }
+    return snippets.length
+      ? snippets.join("\n")
+      : "No readable source files could be fetched within the repository context limits.";
+  };
+
+  const sendPrompt = async (override?: string, consentApproved = false) => {
+    const message = (override ?? prompt).trim();
+    if (!message || sending) return;
+    if (!repo) {
+      notify("Import a repository first.", "info");
+      api.current.drawer(true);
+      return;
+    }
+    if (!consentApproved && needConsent("chat")) {
+      pendingMessage.current = message;
+      return;
+    }
+    setChat((c) => [...c, { id: uid(), role: "user", text: message }]);
+    setPrompt("");
+    setSending(true);
+    try {
+      const repositoryContext = await fetchRepositoryContext(repo, branch);
+      const context = `You are reviewing the selected GitHub repository. Use only the evidence below and clearly state when evidence is insufficient. Do not claim files were inspected unless included below.\nRepository: ${repo.full_name}\nBranch: ${branch}\nRepository source excerpts (bounded scan; not guaranteed to include every file):\n${repositoryContext}${selectedFile ? `\nCurrently selected file: ${selectedFile.path}\nSelected file source:\n${sourceCode.slice(0, 10000)}` : ""}\n\n${DEPTH_NOTE[effortRef.current] ?? DEPTH_NOTE.medium}\n\nUser question: ${message}`;
+      const payload = asRecord(
+        await request<unknown>("/api/ai/chat", {
+          method: "POST",
+          body: JSON.stringify({ message: context }),
+        }),
+      );
+      const nested = asRecord(payload.data);
+      const responseText = [
+        payload.response,
+        payload.reply,
+        payload.message,
+        nested.response,
+        nested.reply,
+        nested.message,
+      ].find((v) => typeof v === "string" && v.trim().length > 0);
+      setChat((c) => [
+        ...c,
+        {
+          id: uid(),
+          role: "assistant",
+          text:
+            typeof responseText === "string"
+              ? responseText
+              : "The AI service returned an empty response. Please try asking again.",
+        },
+      ]);
+    } catch (error) {
+      setChat((c) => [
+        ...c,
+        {
+          id: uid(),
+          role: "assistant",
+          text: `I couldn't reach the AI chat service. ${error instanceof Error ? error.message : "Please try again."}`,
+        },
+      ]);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const languageForFile = (filename: string): string => {
+    const extension = filename.toLowerCase().split(".").pop() || "";
+    const languages: Record<string, string> = {
+      py: "python",
+      js: "javascript",
+      jsx: "javascript",
+      mjs: "javascript",
+      cjs: "javascript",
+      ts: "typescript",
+      tsx: "typescript",
+      mts: "typescript",
+      cts: "typescript",
+      go: "go",
+      rb: "ruby",
+      c: "c",
+      h: "c",
+      cc: "cpp",
+      cpp: "cpp",
+      cxx: "cpp",
+      hpp: "cpp",
+      hxx: "cpp",
+    };
+    return languages[extension] || "auto";
+  };
+
+  const analyzeSelectedFile = async (consentApproved = false) => {
+    if (!selectedFile || !sourceCode.trim() || analyzing || loadingFile) {
+      notify(
+        "Choose a file with readable source code before analyzing.",
+        "info",
+      );
+      return;
+    }
+    if (sourceCode.length > 20000) {
+      notify(
+        "This analysis endpoint accepts source files up to 20,000 characters. Select a smaller file.",
+        "info",
+      );
+      return;
+    }
+    if (!consentApproved && needConsent("analyze")) return;
+    setAnalyzing(true);
+    setAnalysisResult(null);
+    try {
+      const payload = asRecord(
+        await request<unknown>("/api/ai/analyze", {
+          method: "POST",
+          body: JSON.stringify({
+            language: languageForFile(selectedFile.name),
+            filename: selectedFile.name,
+            source_code: sourceCode,
+          }),
+        }),
+      );
+      const nested = asRecord(payload.data);
+      const result = asRecord(
+        nested.summary || payload.summary ? (payload.data ?? payload) : payload,
+      );
+      setAnalysisResult(result);
+      const issues = Number(asRecord(result.summary).issues_found ?? 0);
+      notify(`Analysis complete. ${issues} issue(s) reported.`, "success");
+      openSheet("analysis");
+    } catch (error) {
+      notify(
+        `Code analysis failed. ${error instanceof Error ? error.message : "Please try again."}`,
+        "error",
+      );
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const requestRepair = async (consentApproved = false) => {
+    if (!selectedFile || !sourceCode.trim() || repairing) {
+      notify(
+        "Choose a file with readable source code before requesting a repair.",
+        "info",
+      );
+      return;
+    }
+    if (!isPython) {
+      notify(
+        "The current repair API supports Python files (.py) only. You can still ask the AI about other files.",
+        "info",
+      );
+      return;
+    }
+    if (!consentApproved && needConsent("repair")) return;
+    setRepairing(true);
+    setRepairResult(null);
+    try {
+      const payload = asRecord(
+        await request<unknown>("/api/ai/repair", {
+          method: "POST",
+          body: JSON.stringify({
+            language: "python",
+            source_code: sourceCode,
+            filename: selectedFile.name,
+            rule: "manual-review",
+          }),
+        }),
+      );
+      setRepairResult(
+        asRecord(payload.data).repair
+          ? (asRecord(payload.data).repair as RepairResult)
+          : asRecord(payload.repair ?? payload.data ?? payload),
+      );
+      openSheet("repair");
+    } catch (error) {
+      notify(
+        `Repair request failed. ${error instanceof Error ? error.message : ""}`,
+        "error",
+      );
+    } finally {
+      setRepairing(false);
+    }
+  };
+
+  const repairText = useMemo(() => {
+    if (!repairResult) return "";
+    for (const key of [
+      "proposed_code",
+      "proposedCode",
+      "fixed_code",
+      "fixedCode",
+      "code",
+      "content",
+      "suggestion",
+      "explanation",
+      "message",
+    ]) {
+      if (typeof repairResult[key] === "string")
+        return repairResult[key] as string;
+    }
+    return JSON.stringify(repairResult, null, 2);
+  }, [repairResult]);
+
+  const analysisSummary = asRecord(analysisResult?.summary);
+  const rawFindings = analysisResult?.findings;
+  const findings: unknown[] = Array.isArray(rawFindings) ? rawFindings : [];
+  const rawLimits = analysisResult?.limitations;
+  const limitations: string[] = Array.isArray(rawLimits)
+    ? rawLimits.map(String)
+    : [];
+
+  const copy = (value: string, label: string) => {
+    if (!navigator.clipboard) {
+      notify("Copy isn't available on insecure (http) pages.", "info");
+      return;
+    }
+    void navigator.clipboard
+      .writeText(value)
+      .then(() => notify(`${label} copied.`, "success"));
+  };
+  const refreshAll = () => {
+    void loadRepos();
+    if (repo) void loadContents(repo, branch);
+    notify("Refreshing from GitHub…", "info");
+  };
+  const askAbout = () => {
+    closeSheet();
+    setTimeout(
+      () =>
+        document
+          .querySelector<HTMLTextAreaElement>(".dm-mascot textarea")
+          ?.focus(),
+      350,
+    );
+  };
+
+  /* ---------- shared fragments ---------- */
+  const voiceOk =
+    typeof window !== "undefined" &&
+    ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
+  const chatEmpty = chat.length === 0 && !sending;
+  const avatar = status.avatar_url || status.avatarUrl;
+  const initial = (status.username || "D").slice(0, 1).toUpperCase();
+
+  const search = (
+    value: string,
+    set: (v: string) => void,
+    placeholder: string,
+    disabled = false,
+  ) => (
+    <label className={`dm-search ${disabled ? "off" : ""}`}>
+      <Search size={16} />
+      <input
+        value={value}
+        disabled={disabled}
+        onChange={(e) => set(e.target.value)}
+        placeholder={placeholder}
+        aria-label={placeholder}
+        enterKeyHint="search"
+        autoCapitalize="none"
+        autoCorrect="off"
       />
-      <div className="mt-1.5 flex items-center justify-between">
-        <div className="flex items-center gap-2 rounded-full bg-white/10 py-1.5 pl-2.5 pr-3 text-sm font-medium text-zinc-300">
-          <span className="h-2 w-2 rounded-full" style={{ background: G }} />
-          DevMind AI
-        </div>
-        <button
-          aria-label="Send"
-          onClick={send}
-          disabled={!text.trim()}
-          className="dm-press grid h-10 w-10 place-items-center rounded-full transition-colors"
-          style={
-            text.trim()
-              ? { background: G, color: "#000" }
-              : { background: "rgba(255,255,255,.1)", color: "#52525b" }
-          }
-        >
-          <ArrowUp size={20} strokeWidth={2.4} />
-        </button>
-      </div>
+    </label>
+  );
+
+  const repoRows = loadingRepos ? (
+    <div className="dm-state">
+      <Spin /> Loading repositories…
+    </div>
+  ) : !status.connected ? (
+    <div className="dm-state">Connect GitHub to see your repositories.</div>
+  ) : visibleRepos.length === 0 ? (
+    <div className="dm-state">
+      {repos.length
+        ? "No repositories match your search."
+        : "No repositories found."}
+    </div>
+  ) : (
+    <div className="dm-repos">
+      {visibleRepos.map((item) => {
+        const on = repo?.full_name === item.full_name;
+        const act = () =>
+          on ? api.current.drawer(false) : void chooseRepo(item);
+        return (
+          <div key={String(item.id)} className={`dm-repo ${on ? "on" : ""}`}>
+            <button className="dm-repo-main dm-press" onClick={act}>
+              <span className="dm-repo-ic">
+                <FaGithub size={18} />
+              </span>
+              <span className="dm-repo-tx">
+                <strong>{item.name}</strong>
+                <small>
+                  {item.private && <Lock size={11} />}
+                  {item.full_name}
+                </small>
+              </span>
+            </button>
+            <button
+              className={`dm-import dm-press ${on ? "done" : ""}`}
+              onClick={act}
+            >
+              {on ? (
+                <>
+                  <Check size={14} strokeWidth={2.6} /> Imported
+                </>
+              ) : (
+                "Import"
+              )}
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 
-  return (
-    <div
-      className="dm relative flex w-full overflow-hidden bg-black text-white"
-      style={{ height: "100dvh" }}
-    >
-      <style>{CSS}</style>
+  const connection = (
+    <div className="dm-conn">
+      <div className="dm-conn-row">
+        <span className={`dm-dot ${status.connected ? "on" : ""}`} />
+        <div>
+          <strong>
+            {status.connected
+              ? `GitHub${status.username ? ` · ${status.username}` : " connected"}`
+              : "GitHub not connected"}
+          </strong>
+          <small>
+            {status.connected
+              ? "Repository access is active"
+              : "Connect to start analyzing code"}
+          </small>
+        </div>
+      </div>
+      {status.connected ? (
+        <button
+          className="dm-btn o dm-press"
+          onClick={() => void disconnectGithub()}
+        >
+          <Unplug size={17} /> Disconnect
+        </button>
+      ) : (
+        <button className="dm-btn g dm-press" onClick={connectGithub}>
+          <FaGithub size={18} /> Connect GitHub
+        </button>
+      )}
+    </div>
+  );
 
-      {/* ---- sidebar: projects + files (persistent on large screens) ---- */}
-      <aside
-        ref={dR}
-        className="dm-drawer dm-glass fixed lg:static z-30 top-0 bottom-0 left-0 flex flex-col gap-4 bg-black/70 backdrop-blur-2xl backdrop-saturate-150 border-r border-white/10 px-3"
-        style={{
-          touchAction: "pan-y",
-          willChange: "transform",
-          paddingTop: "calc(20px + env(safe-area-inset-top, 0px))",
-          paddingBottom: "calc(16px + env(safe-area-inset-bottom, 0px))",
-        }}
-      >
-        <div className="flex items-center gap-2.5 px-2 text-xl font-semibold tracking-tight">
-          <Orb size={32} />
-          DevMind
+  /* code viewer: opens in a sheet so the two-panel layout stays as sketched */
+  const codeView = (
+    <>
+      <div className="dm-ph dm-ph-code">
+        <div className="dm-file-tx">
+          <h2>{selectedFile?.name || "Source"}</h2>
+          <p>{selectedFile?.path || "Select a file to read it here."}</p>
         </div>
         <button
-          onClick={newChat}
-          className="dm-press dm-hv flex w-full items-center gap-2.5 rounded-xl border border-white/10 p-2.5 text-sm font-medium"
+          className="dm-ib sm dm-press"
+          aria-label="Copy source"
+          disabled={!sourceCode}
+          onClick={() => copy(sourceCode, "Source")}
         >
-          <Plus size={18} style={{ color: G }} />
-          New chat
+          <Copy size={16} />
         </button>
-        <div>
-          <div className="flex items-center gap-1 px-2 pb-1 text-sm font-medium text-zinc-400">
-            Projects <ChevronRight size={15} />
-          </div>
-          <button
-            onClick={() => api.current.drawer(false)}
-            className={`dm-press dm-hv relative flex w-full items-center gap-3 rounded-xl p-2.5 ${!project ? "bg-white/10" : ""}`}
-          >
-            <Folder size={19} className="flex-none text-zinc-300" />
-            <div className="min-w-0">
-              <div className="text-sm font-medium">DevMind</div>
-              <div className="text-xs text-zinc-400">Workspace</div>
-            </div>
-          </button>
-          {project && (
-            <button
-              onClick={() => api.current.drawer(false)}
-              className="dm-press dm-hv relative mt-1 flex w-full items-center gap-3 rounded-xl bg-white/10 p-2.5"
-            >
-              <span
-                className="absolute left-0 top-3 bottom-3 w-0.5 rounded-full"
-                style={{ background: G }}
-              />
-              <SrcIcon size={19} className="flex-none text-zinc-300" />
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium">
-                  {project.name}
-                </div>
-                <div className="truncate text-xs text-zinc-400">
-                  {project.meta}
-                </div>
-              </div>
-            </button>
-          )}
-        </div>
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="px-2 pb-1 text-sm font-medium text-zinc-400">
-            Files
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {project ? (
-              <Tree
-                nodes={tree}
-                base=""
-                depth={0}
-                open={open}
-                toggle={toggle}
-                pick={pickFile}
-                sel={focus ? "/" + focus : null}
-              />
-            ) : (
-              <div className="px-2 text-sm text-zinc-500">
-                Connect a project to browse its folders.
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-3 rounded-2xl bg-white/10 p-2.5">
-          <div className="grid h-9 w-9 place-items-center rounded-full bg-white text-sm font-semibold text-black">
-            AB
-          </div>
-          <div className="leading-tight">
-            <div className="text-sm font-medium">Alan Babu</div>
-            <div className="text-xs text-zinc-400">Developer</div>
-          </div>
-        </div>
-      </aside>
-      <div
-        ref={scR}
-        className="fixed inset-0 z-20 bg-black/60 lg:hidden"
-        style={{ opacity: 0, pointerEvents: "none", touchAction: "none" }}
-      />
-      <div
-        ref={eR}
-        className="fixed bottom-0 left-0 z-10 w-5 lg:hidden"
-        style={{ top: 80, touchAction: "none" }}
-      />
-
-      {/* ---- main ---- */}
-      <main className="relative h-full min-w-0 flex-1">
-        <header
-          className="absolute inset-x-0 top-0 z-10 flex items-center gap-2 px-3.5 pb-4"
-          style={{
-            paddingTop: "calc(10px + env(safe-area-inset-top, 0px))",
-            background: "linear-gradient(#000 45%, transparent)",
-          }}
+      </div>
+      <div className="dm-actions">
+        <button
+          className="dm-pill dm-press"
+          disabled={!selectedFile}
+          onClick={askAbout}
         >
+          <MessageSquareText size={15} /> Ask
+        </button>
+        <button
+          className="dm-pill dm-press"
+          disabled={!sourceCode || analyzing || loadingFile || repairing}
+          onClick={() => void analyzeSelectedFile()}
+          title="Run static analysis for the selected source file"
+        >
+          {analyzing ? <Spin size={15} /> : <ShieldCheck size={15} />}{" "}
+          {analyzing ? "Analyzing" : "Analyze"}
+        </button>
+        <button
+          className="dm-pill g dm-press"
+          disabled={
+            !sourceCode || repairing || loadingFile || analyzing || !isPython
+          }
+          onClick={() => void requestRepair()}
+          title={
+            selectedFile && !isPython
+              ? "Repair API currently supports Python files only"
+              : "Request an AI repair proposal"
+          }
+        >
+          {repairing ? <Spin size={15} /> : <Sparkles size={15} />}{" "}
+          {repairing ? "Reviewing" : "Repair"}
+        </button>
+        {analysisResult && (
           <button
-            aria-label="Projects"
-            onClick={() => api.current.drawer(true)}
-            className={`dm-press dm-hv grid h-11 w-11 place-items-center rounded-full lg:hidden ${glass}`}
+            className="dm-pill dm-press"
+            onClick={() => openSheet("analysis")}
           >
-            <Menu size={20} strokeWidth={1.75} />
+            Analysis
           </button>
-          <div className="hidden w-11 lg:block" />
-          <div className="min-w-0 flex-1 truncate text-center font-semibold tracking-tight">
-            {project ? project.name : "DevMind"}
+        )}
+        {repairResult && (
+          <button
+            className="dm-pill dm-press"
+            onClick={() => openSheet("repair")}
+          >
+            Proposal
+          </button>
+        )}
+      </div>
+      <div className="dm-meta">
+        <span>
+          <span className={`dm-dot ${selectedFile ? "on" : ""}`} />{" "}
+          {loadingFile
+            ? "Reading file"
+            : selectedFile
+              ? "Read-only"
+              : "No file selected"}
+        </span>
+        <span>
+          {selectedFile
+            ? `${lineCount} lines${isPython ? "" : " · Repair: Python only"}`
+            : ""}
+        </span>
+      </div>
+      <div className="dm-code-scroll">
+        {loadingFile ? (
+          <div className="dm-state">
+            <Spin size={18} /> Fetching file contents…
           </div>
+        ) : selectedFile ? (
+          sourceCode ? (
+            <div className="dm-source">
+              <pre className="dm-ln" aria-hidden="true">
+                {lineNumbers}
+              </pre>
+              <pre className="dm-src">
+                <code>{sourceCode}</code>
+              </pre>
+            </div>
+          ) : (
+            <div className="dm-empty">
+              <FileCode2 size={26} />
+              <strong>File contents unavailable</strong>
+              <span>The API returned no readable source for this path.</span>
+            </div>
+          )
+        ) : (
+          <div className="dm-empty">
+            <span className="dm-empty-ic">
+              <Code2 size={24} />
+            </span>
+            <strong>Your code, in context.</strong>
+            <span>
+              Pick a file from Files to read it here, then ask DevMind, analyze
+              it or request a repair review.
+            </span>
+          </div>
+        )}
+      </div>
+    </>
+  );
+
+  /* ---------- render ---------- */
+  return (
+    <div className={`dm-app ${kb ? "kb" : ""}`}>
+      <style>{styles}</style>
+
+      {/* repository drawer (persistent sidebar on desktop) */}
+      <aside ref={dR} className="dm-drawer dm-glass" aria-label="Repositories">
+        <div className="dm-brand">
+          <Orb size={34} />
+          DevMind
+        </div>
+        {search(
+          repoSearch,
+          setRepoSearch,
+          "Find repository",
+          !status.connected,
+        )}
+        <div className="dm-side-scroll">{repoRows}</div>
+        {connection}
+      </aside>
+      <div ref={dscR} className="dm-dscrim" />
+
+      <div className="dm-shell">
+        <header className="dm-top dm-glass">
           <button
-            aria-label="Notifications"
-            onClick={() => {
-              setBell(false);
-              say("You're all caught up");
-            }}
-            className={`dm-press dm-hv relative grid h-11 w-11 place-items-center rounded-full ${glass}`}
+            className="dm-ib dm-press dm-menu"
+            aria-label="Repositories"
+            onClick={() => api.current.drawer(true)}
           >
-            <Bell size={20} strokeWidth={1.75} />
-            {bell && (
-              <span
-                className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full ring-2 ring-black"
-                style={{ background: G }}
-              />
-            )}
+            <Menu size={20} />
           </button>
-          <div
-            className={`flex items-center gap-2 rounded-full py-1 pl-1 pr-3 ${glass}`}
+          {status.connected ? (
+            <div className="dm-title two">
+              <strong className="dm-truncate">
+                {repo ? repo.full_name : "Choose a repository"}
+              </strong>
+              <span className="dm-truncate">
+                {repo
+                  ? `${branch} · ${repo.private ? "Private" : "Public"}`
+                  : "Open the menu to import one"}
+              </span>
+            </div>
+          ) : (
+            <div className="dm-title">DevMind</div>
+          )}
+          <button
+            className="dm-ib dm-press"
+            aria-label={
+              status.connected ? "Refresh from GitHub" : "Refresh GitHub status"
+            }
+            onClick={() =>
+              status.connected ? refreshAll() : void loadStatus()
+            }
+            disabled={loadingStatus || loadingRepos}
           >
-            <div className="grid h-8 w-8 place-items-center rounded-full bg-white text-xs font-semibold text-black">
-              AB
-            </div>
-            <div className="text-sm font-semibold leading-tight">
-              Alan Babu
-              <div className="text-xs font-normal text-zinc-400">Developer</div>
-            </div>
+            <RefreshCw
+              size={18}
+              className={loadingStatus || loadingRepos ? "dm-spin" : ""}
+            />
+          </button>
+          <div className="dm-avatar" aria-hidden="true">
+            {avatar ? <img src={avatar} alt="" /> : initial}
           </div>
         </header>
 
-        <div
-          ref={scrollR}
-          className="absolute inset-0 overflow-y-auto px-5"
-          style={{
-            paddingTop: "calc(80px + env(safe-area-inset-top, 0px))",
-            paddingBottom: project ? 230 : 40,
-            WebkitOverflowScrolling: "touch",
-          }}
-        >
-          {!project ? (
-            /* ---------- centered home: greeting, sources, composer ---------- */
-            <section className="dm-in mx-auto flex min-h-full w-full max-w-2xl flex-col items-center justify-center py-6 text-center">
-              <Orb size={52} />
-              <h1
-                className="mt-5 text-4xl font-bold tracking-tighter sm:text-5xl"
-                style={{ lineHeight: 1.05 }}
-              >
-                Hello, Alan.
-              </h1>
-              <p className="mb-8 mt-3 text-zinc-400">
-                Bring in your code. DevMind reads it, maps it and audits it.
-              </p>
-              <div className="mb-3 grid w-full gap-3 sm:grid-cols-2">
-                <button
-                  key={"a" + nudge}
-                  onClick={connect}
-                  className={`dm-press dm-hvw flex w-full items-center gap-4 rounded-3xl bg-white p-4 text-black ${nudge ? "dm-nudge" : ""}`}
-                >
-                  <div className="grid h-12 w-12 flex-none place-items-center rounded-2xl bg-black text-white">
-                    <Github size={23} strokeWidth={1.75} />
+        <main className="dm-content">
+          {!status.connected ? (
+            /* ---------- before connecting (unchanged) ---------- */
+            <div className="dm-scroll">
+              <section className="dm-home">
+                <Orb size={56} />
+                <h1>Understand your code.</h1>
+                <p>
+                  Connect a repository to explore it, ask questions with
+                  context, and review AI-proposed repairs.
+                </p>
+                {loadingStatus ? (
+                  <div className="dm-state">
+                    <Spin /> Checking GitHub…
                   </div>
-                  <div>
-                    <div className="font-semibold tracking-tight">
-                      Connect to GitHub
-                    </div>
-                    <div className="text-sm text-zinc-600">
-                      Pull in a repository
-                    </div>
-                  </div>
-                </button>
-                <button
-                  key={"b" + nudge}
-                  onClick={() => fileR.current?.click()}
-                  className={`dm-press dm-hv flex w-full items-center gap-4 rounded-3xl p-4 ${glass} ${nudge ? "dm-nudge" : ""}`}
-                >
-                  <div
-                    className="grid h-12 w-12 flex-none place-items-center rounded-2xl"
-                    style={{ background: G14, color: G }}
-                  >
-                    <FileArchive size={23} strokeWidth={1.75} />
-                  </div>
-                  <div>
-                    <div className="font-semibold tracking-tight">
-                      Upload zip file
-                    </div>
-                    <div className="text-sm text-zinc-400">
-                      Drop in a project archive
-                    </div>
-                  </div>
-                </button>
-              </div>
-              <input
-                ref={fileR}
-                type="file"
-                accept=".zip,application/zip,application/x-zip-compressed"
-                className="hidden"
-                onChange={onFile}
-              />
-              {composer}
-            </section>
-          ) : (
-            /* ---------- centered chat thread ---------- */
-            <section className="mx-auto w-full max-w-2xl">
-              <div
-                className={`dm-in mt-3 flex items-center gap-4 rounded-3xl p-4 ${glass}`}
-              >
-                <div className="grid h-12 w-12 flex-none place-items-center rounded-2xl bg-white text-black">
-                  <SrcIcon size={22} strokeWidth={1.75} />
-                </div>
-                <div className="min-w-0">
-                  <div className="text-xs text-zinc-400">
-                    {project.kind === "gh"
-                      ? "Connected repository"
-                      : "Uploaded file"}
-                  </div>
-                  <div className="wrap-break-word font-semibold leading-snug tracking-tight">
-                    {project.name}
-                  </div>
-                  <div className="text-xs text-zinc-400">{project.meta}</div>
-                </div>
-                <div className="ml-auto flex flex-none flex-col items-end gap-2">
-                  <div
-                    className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
-                    style={{ color: G, background: G14 }}
-                  >
-                    <Check size={14} strokeWidth={2.6} />
-                    Ready
-                  </div>
-                  <button
-                    onClick={showFiles}
-                    className="dm-press dm-hv flex items-center gap-1.5 rounded-full border border-white/10 px-2.5 py-1 text-xs font-medium"
-                  >
-                    <Folder size={13} style={{ color: G }} />
-                    Files
-                  </button>
-                </div>
-              </div>
-
-              <div className={`mt-5 rounded-3xl p-4 ${glass}`}>
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <div>
-                    <div className="font-semibold tracking-tight">
-                      Python source code
-                    </div>
-                    <div className="text-xs text-zinc-400">
-                      Paste code here. The demo repository picker does not read
-                      repository files.
-                    </div>
-                  </div>
-                  <span className="flex-none text-xs text-zinc-500">
-                    {sourceCode.length}/20000
-                  </span>
-                </div>
-                <textarea
-                  value={sourceCode}
-                  onChange={(e) =>
-                    setSourceCode(e.target.value.slice(0, 20000))
-                  }
-                  maxLength={20000}
-                  spellCheck={false}
-                  aria-label="Python source code to analyze"
-                  className="min-h-40 w-full resize-y rounded-2xl border border-white/10 bg-black/60 p-3 font-mono text-sm leading-relaxed text-zinc-100 outline-none focus:border-[#76B900]"
-                  placeholder="Paste Python source code here..."
-                />
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <button
-                    onClick={() => run("all")}
-                    disabled={busy || !sourceCode.trim()}
-                    className="dm-press rounded-full px-4 py-2.5 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-50"
-                    style={{ background: G }}
-                  >
-                    {busy ? "Working…" : "Analyze code"}
-                  </button>
-                  <button
-                    onClick={() => run("readiness")}
-                    disabled={busy || !sourceCode.trim()}
-                    className="dm-press flex items-center gap-2 rounded-full border border-white/15 px-4 py-2.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <CheckCircle2 size={16} style={{ color: G }} />
-                    Check readiness
-                  </button>
-                </div>
-              </div>
-
-              {msgs.length === 0 && (
-                <div className="text-center">
-                  <h2 className="mb-4 mt-10 text-2xl font-bold tracking-tight sm:text-3xl">
-                    What would you like to do?
-                  </h2>
-                  <div className="grid gap-3 text-left">
-                    {(Object.keys(ACTS) as ActKey[]).map((k, i) => {
-                      const a = ACTS[k];
-                      return (
-                        <button
-                          key={k}
-                          onClick={() => run(k)}
-                          style={{ animationDelay: `${0.08 * (i + 1)}s` }}
-                          className={`dm-in dm-press dm-hv flex w-full items-center gap-4 rounded-3xl p-4 ${glass}`}
-                        >
-                          <div
-                            className="grid h-12 w-12 flex-none place-items-center rounded-2xl"
-                            style={{ background: G14, color: G }}
-                          >
-                            <a.Icon size={22} strokeWidth={1.75} />
-                          </div>
-                          <div>
-                            <div className="font-semibold tracking-tight">
-                              {a.title}
-                            </div>
-                            <div className="text-sm text-zinc-400">{a.sub}</div>
-                          </div>
-                          <ChevronRight
-                            size={18}
-                            className="ml-auto text-zinc-500"
-                          />
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              <div className="mt-8 flex flex-col gap-6">
-                {msgs.map((m) =>
-                  m.t === "u" ? (
-                    <div
-                      key={m.id}
-                      className="dm-in select-text self-end rounded-3xl rounded-br-md px-4 py-2.5 font-medium text-black"
-                      style={{ background: G, maxWidth: "85%" }}
-                    >
-                      {m.text}
-                    </div>
-                  ) : (
-                    <div key={m.id} className="dm-in flex gap-3">
-                      <Orb size={30} />
-                      <div className="min-w-0 flex-1 pt-0.5">
-                        {m.t === "a" ? (
-                          m.text === null ? (
-                            <div className="flex items-center gap-2.5 pt-1 text-sm text-zinc-400">
-                              <Spin />
-                              Thinking
-                            </div>
-                          ) : (
-                            <div className="select-text leading-relaxed text-zinc-100">
-                              {m.text}
-                              {!m.done && <span className="dm-caret" />}
-                              {m.done && (
-                                <div className="mt-2 text-xs text-zinc-500">
-                                  Preview response
-                                </div>
-                              )}
-                            </div>
-                          )
-                        ) : m.done ? (
-                          <div
-                            className={`select-text rounded-3xl p-4 ${glass}`}
-                          >
-                            <div className="mb-2 font-semibold tracking-tight">
-                              {m.error
-                                ? "Request failed"
-                                : m.k === "readiness"
-                                  ? "Production readiness result"
-                                  : "Code analysis result"}
-                            </div>
-                            {m.error ? (
-                              <div className="rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-sm text-red-200">
-                                {m.error}
-                                <div className="mt-2 text-xs text-zinc-400">
-                                  Confirm the API Gateway is running on port
-                                  5001 and the AI service is healthy.
-                                </div>
-                              </div>
-                            ) : (
-                              <>
-                                {m.k === "readiness" && m.result && (
-                                  <div className="mb-3 rounded-2xl border border-white/10 bg-black/30 p-3">
-                                    <div className="flex flex-wrap items-end justify-between gap-3">
-                                      <div>
-                                        <div className="text-xs text-zinc-400">
-                                          Provisional score
-                                        </div>
-                                        <div
-                                          className="text-3xl font-bold"
-                                          style={{ color: G }}
-                                        >
-                                          {String(m.result.score ?? "—")}
-                                          {typeof m.result.score === "number"
-                                            ? "%"
-                                            : ""}
-                                        </div>
-                                      </div>
-                                      <div className="text-right text-sm">
-                                        <div>
-                                          Production ready:{" "}
-                                          <span
-                                            className={
-                                              m.result.production_ready === true
-                                                ? "text-lime-400"
-                                                : "text-amber-300"
-                                            }
-                                          >
-                                            {m.result.production_ready === true
-                                              ? "Yes"
-                                              : "No"}
-                                          </span>
-                                        </div>
-                                        <div className="mt-1 text-xs text-zinc-400">
-                                          {String(
-                                            m.result.score_type ??
-                                              "unknown score type",
-                                          )}
-                                        </div>
-                                      </div>
-                                    </div>
-                                    {Array.isArray(
-                                      m.result.unknown_categories,
-                                    ) && (
-                                      <div className="mt-3 text-sm text-zinc-300">
-                                        <div className="mb-1 text-xs text-zinc-400">
-                                          Categories without evidence
-                                        </div>
-                                        <div className="flex flex-wrap gap-1.5">
-                                          {(
-                                            m.result
-                                              .unknown_categories as unknown[]
-                                          ).map((category) => (
-                                            <span
-                                              key={String(category)}
-                                              className="rounded-full bg-white/10 px-2.5 py-1 text-xs"
-                                            >
-                                              {String(category)}
-                                            </span>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    )}
-                                    {typeof m.result.note === "string" && (
-                                      <p className="mt-3 text-xs leading-relaxed text-zinc-400">
-                                        {m.result.note}
-                                      </p>
-                                    )}
-                                  </div>
-                                )}
-                                <details className="rounded-xl border border-white/10 bg-black/30 p-3">
-                                  <summary className="cursor-pointer text-sm font-medium">
-                                    View complete API response
-                                  </summary>
-                                  <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap wrap-break-word text-xs leading-relaxed text-zinc-300">
-                                    {JSON.stringify(m.result ?? {}, null, 2)}
-                                  </pre>
-                                </details>
-                              </>
-                            )}
-                            <div className="mt-3 text-xs text-zinc-500">
-                              Real response from the DevMind API Gateway
-                            </div>
-                          </div>
-                        ) : (
-                          ACTS[m.k].steps.map((s, i) => (
-                            <div
-                              key={i}
-                              className={`flex items-center gap-2.5 py-1 text-sm ${i < m.step ? "text-white" : i === m.step ? "text-zinc-300" : "text-zinc-600"}`}
-                            >
-                              {i < m.step ? (
-                                <Check
-                                  size={16}
-                                  strokeWidth={2.6}
-                                  style={{ color: G }}
-                                />
-                              ) : i === m.step ? (
-                                <Spin />
-                              ) : (
-                                <span className="h-4 w-4" />
-                              )}
-                              {s}
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  ),
-                )}
-                {msgs.length > 0 && !busy && left.length > 0 && (
-                  <div
-                    className="dm-in -mx-5 flex gap-2 overflow-x-auto px-5 pb-1 sm:justify-center"
-                    style={{
-                      touchAction: "pan-x pan-y",
-                      scrollbarWidth: "none",
-                    }}
-                  >
-                    {left.map((k) => (
+                ) : (
+                  <>
+                    <div className="dm-cta">
                       <button
-                        key={k}
-                        onClick={() => run(k)}
-                        className={`dm-press dm-hv flex flex-none items-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium ${glass}`}
+                        className="dm-btn g dm-press"
+                        onClick={connectGithub}
                       >
-                        {(() => {
-                          const I = ACTS[k].Icon;
-                          return <I size={16} style={{ color: G }} />;
-                        })()}
-                        {ACTS[k].title}
+                        <FaGithub size={19} /> Connect GitHub{" "}
+                        <ArrowRight size={17} />
                       </button>
-                    ))}
-                  </div>
+                      <button
+                        className="dm-btn o dm-press"
+                        onClick={() =>
+                          notify(
+                            "ZIP import is not connected to a backend endpoint yet. Use GitHub for live repository browsing.",
+                            "info",
+                          )
+                        }
+                      >
+                        <ArrowDownToLine size={17} /> Import a project
+                      </button>
+                    </div>
+                    <div className="dm-trust">
+                      <ShieldCheck size={15} /> You choose what to inspect.
+                      Repairs stay proposals until you review them.
+                    </div>
+                  </>
                 )}
-              </div>
-            </section>
+              </section>
+            </div>
+          ) : (
+            /* ---------- after connecting: Files | DevMind AI, as sketched ---------- */
+            <div className="dm-stack">
+              <section
+                className={`dm-card dm-files ${filesOpen ? "open" : ""}`}
+              >
+                <div className="dm-ph dm-ph-files">
+                  <button
+                    className="dm-collapse dm-press"
+                    onClick={() => setFilesOpen((o) => !o)}
+                    aria-expanded={filesOpen}
+                  >
+                    <h2>Files</h2>
+                    <ChevronDown
+                      size={18}
+                      className={`dm-chev2 ${filesOpen ? "open" : ""}`}
+                    />
+                  </button>
+                  <label className={`dm-branch ${repo ? "" : "off"}`}>
+                    <GitBranch size={14} />
+                    <select
+                      value={branch}
+                      disabled={!repo}
+                      aria-label="Select branch"
+                      onChange={(e) => {
+                        if (!repo) return;
+                        setConsentKey(null);
+                        setAnalysisResult(null);
+                        setRepairResult(null);
+                        setBranch(e.target.value);
+                        void loadContents(repo, e.target.value);
+                        setSelectedFile(null);
+                        setSourceCode("");
+                      }}
+                    >
+                      {branches.length ? (
+                        branches.map((b) => (
+                          <option key={b.name} value={b.name}>
+                            {b.name}
+                          </option>
+                        ))
+                      ) : (
+                        <option value={branch}>{branch}</option>
+                      )}
+                    </select>
+                    <ChevronDown size={13} />
+                  </label>
+                </div>
+                <div className="dm-files-body">
+                  <div className="dm-pad">
+                    {search(fileSearch, setFileSearch, "Search files", !repo)}
+                  </div>
+                  <div className="dm-pscroll">
+                    {!repo ? (
+                      <div className="dm-empty">
+                        <span className="dm-empty-ic">
+                          <Folder size={24} />
+                        </span>
+                        <strong>No repository imported</strong>
+                        <span>Import one to browse its folders and files.</span>
+                        <button
+                          className="dm-btn g dm-press dm-inline-btn"
+                          onClick={() => api.current.drawer(true)}
+                        >
+                          <Plus size={17} /> Import a repository
+                        </button>
+                      </div>
+                    ) : loadingFiles ? (
+                      <div className="dm-state">
+                        <Spin size={18} /> Loading repository tree…
+                      </div>
+                    ) : tree.length ? (
+                      <TreeItems
+                        nodes={tree}
+                        depth={0}
+                        selected={selectedFile?.path || ""}
+                        expanded={expanded}
+                        onToggle={toggleDirectory}
+                        onSelect={(e) => void selectFile(e)}
+                      />
+                    ) : (
+                      <div className="dm-empty">
+                        <Folder size={26} />
+                        <strong>No files to display</strong>
+                        <span>Check the branch or clear your search.</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
+
+              <section className="dm-card dm-aicard">
+                <div className="dm-ph dm-ph-ai">
+                  <div className="dm-ai-title">
+                    <div>
+                      <h2>DevMind AI</h2>
+                      <p>Codebase assistant</p>
+                    </div>
+                  </div>
+                  {chat.length > 0 && (
+                    <button
+                      className="dm-ib sm dm-press"
+                      aria-label="New chat"
+                      onClick={() => setChat([])}
+                    >
+                      <Plus size={18} />
+                    </button>
+                  )}
+                </div>
+                <div
+                  className={`dm-thread ${chatEmpty ? "empty" : ""}`}
+                  ref={threadR}
+                  aria-live="polite"
+                >
+                  <div className="dm-thread-in">
+                    {chat.map((m) =>
+                      m.role === "user" ? (
+                        <div key={m.id} className="dm-msg user">
+                          <div className="dm-bubble">{m.text}</div>
+                        </div>
+                      ) : (
+                        <div key={m.id} className="dm-msg ai">
+                          <Orb size={28} />
+                          <div className="dm-ai-text">
+                            <Rich text={m.text} />
+                          </div>
+                        </div>
+                      ),
+                    )}
+                    {sending && (
+                      <div className="dm-msg ai">
+                        <Orb size={28} />
+                        <div className="dm-ai-text dm-thinking">
+                          <Spin /> Thinking…
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className={`dm-mascot-wrap ${chatEmpty ? "center" : ""}`}>
+                  <div className="dm-mascot-in">
+                    {selectedFile && (
+                      <div className="dm-ctx-row">
+                        <span className="dm-ctx">
+                          <FileCode2 size={13} />
+                          <span className="dm-truncate">
+                            {selectedFile.path}
+                          </span>
+                        </span>
+                      </div>
+                    )}
+                    <div className="dark dm-mascot">
+                      <AiMascotInput
+                        value={prompt}
+                        onChange={setPrompt}
+                        isProcessing={sending}
+                        showWelcome={chatEmpty}
+                        title={
+                          repo
+                            ? `Ask about ${repo.name}`
+                            : "Import a repository to begin"
+                        }
+                        subtitle={
+                          repo
+                            ? "DevMind reads the code you choose and answers with context"
+                            : "Open the menu and tap Import on a repository"
+                        }
+                        placeholder={
+                          repo
+                            ? "Ask about your code…"
+                            : "Import a repository first…"
+                        }
+                        models={DEVMIND_MODELS}
+                        defaultModelId="devmind"
+                        enableAttachments={false}
+                        enableWebSearch={false}
+                        enableVoice={voiceOk}
+                        onSubmit={async (d: ChatSubmitData) => {
+                          effortRef.current = d.effort;
+                          await sendPrompt(d.prompt);
+                        }}
+                      />
+                    </div>
+                    {chatEmpty && repo && (
+                      <div className="dm-chips">
+                        {[
+                          [
+                            "Explain the architecture",
+                            "Explain the architecture of this repository.",
+                          ],
+                          [
+                            "Review security risks",
+                            "Review this file for security risks.",
+                          ],
+                          [
+                            "Suggest tests",
+                            "What tests should I add for this code?",
+                          ],
+                        ].map(([label, q]) => (
+                          <button
+                            key={label}
+                            className="dm-chip dm-press"
+                            onClick={() => void sendPrompt(q)}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <div className="dm-disc">
+                      <LockKeyhole size={11} /> AI can make mistakes. Verify
+                      changes.
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
           )}
-        </div>
+        </main>
+      </div>
 
-        {/* ---- docked composer (chat mode) ---- */}
-        {project && (
-          <div
-            className="absolute inset-x-0 bottom-0 z-10 px-3.5 pt-8"
-            style={{
-              paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))",
-              background: "linear-gradient(transparent, #000 45%)",
-            }}
-          >
-            {composer}
-          </div>
-        )}
-      </main>
-
-      {/* ---- bottom sheet ---- */}
-      <div
-        ref={swR}
-        className="fixed inset-0 z-50"
-        style={{ pointerEvents: "none" }}
-      >
-        <div
-          ref={sc2R}
-          onClick={() => api.current.sheet(false)}
-          className="absolute inset-0 bg-black/60"
-          style={{ opacity: 0 }}
-        />
+      {/* bottom sheet: code viewer (phones) and repair proposal */}
+      <div ref={swR} className="dm-sw">
+        <div ref={sscR} className="dm-scrim" onClick={closeSheet} />
         <div
           ref={shR}
-          className="dm-sheet dm-glass absolute inset-x-0 bottom-0 mx-auto rounded-t-3xl border border-b-0 border-white/10 bg-zinc-900/80 px-5 backdrop-blur-3xl backdrop-saturate-150"
-          style={{
-            maxHeight: "88dvh",
-            transform: "translate3d(0,100%,0)",
-            willChange: "transform",
-            paddingBottom: "calc(20px + env(safe-area-inset-bottom, 0px))",
-          }}
+          className={`dm-sheet dm-glass ${sheet === "code" ? "tall" : ""}`}
         >
-          <div
-            ref={grR}
-            className="cursor-grab py-3"
-            style={{ touchAction: "none" }}
-          >
-            <div className="mx-auto h-1.5 w-10 rounded-full bg-white/30" />
+          <div ref={grR} className="dm-grab">
+            <i />
           </div>
-          {sheetView === "auth" && (
-            <div>
-              <h2 className="text-2xl font-bold tracking-tight">
-                Connect GitHub
-              </h2>
-              <p className="mb-5 mt-1 text-zinc-400">
-                Choose how DevMind reaches your repositories.
+          {sheet === "code" && <div className="dm-sheet-code">{codeView}</div>}
+          {sheet === "analysis" && analysisResult && (
+            <div className="dm-sheet-body">
+              <div className="dm-sec-head">
+                <h2 className="dm-sheet-h">
+                  <ShieldCheck size={18} /> Static analysis
+                </h2>
+                <span className="dm-lang">
+                  {asString(analysisResult.language, "auto")}
+                </span>
+              </div>
+              <p className="dm-sheet-note">
+                {asString(analysisResult.analysis_level, "Analysis complete")}.
+                Review findings before making changes; DevMind has not modified
+                your repository.
               </p>
-              <button
-                onClick={authorize}
-                className="dm-press dm-hvw flex w-full items-center justify-center gap-2.5 rounded-2xl bg-white p-4 font-semibold text-black"
-              >
-                <Github size={22} />
-                Continue with GitHub
-              </button>
-            </div>
-          )}
-          {sheetView === "wait" && (
-            <div>
-              <h2 className="text-2xl font-bold tracking-tight">Connecting</h2>
-              <p className="mt-1 text-zinc-400">
-                Waiting for GitHub to confirm.
-              </p>
-              <div className="grid place-items-center py-8">
-                <Spin size={28} />
+              <div className="dm-stats">
+                {(
+                  [
+                    ["Issues", analysisSummary.issues_found],
+                    ["Errors", analysisSummary.errors],
+                    ["Warnings", analysisSummary.warnings],
+                    ["Security", analysisSummary.security_issues],
+                  ] as const
+                ).map(([label, v]) => (
+                  <span key={label}>
+                    <strong>{String(v ?? 0)}</strong>
+                    <small>{label}</small>
+                  </span>
+                ))}
+              </div>
+              <div className="dm-sheet-scroll">
+                {findings.length ? (
+                  findings.map((f, i) => <Finding key={i} f={f} />)
+                ) : (
+                  <div className="dm-state">
+                    No findings were reported by the configured analyzers.
+                  </div>
+                )}
+                {limitations.length > 0 && (
+                  <p className="dm-sheet-note">
+                    Limitations: {limitations.join("; ")}
+                  </p>
+                )}
+              </div>
+              <div className="dm-two">
+                <button
+                  className="dm-btn o dm-press"
+                  onClick={() => openSheet("code")}
+                >
+                  Back to code
+                </button>
+                <button className="dm-btn w dm-press" onClick={closeSheet}>
+                  Done
+                </button>
               </div>
             </div>
           )}
-          {sheetView === "repos" && (
-            <div>
-              <h2 className="text-2xl font-bold tracking-tight">
-                Pick a repository
-              </h2>
-              <p className="mb-3 mt-1 text-zinc-400">
-                Signed in as{" "}
-                <b className="font-semibold text-white">alanbabu</b>
-              </p>
-              {REPOS.map((r, i) => (
+          {sheet === "repair" && (
+            <div className="dm-sheet-body">
+              <div className="dm-sec-head">
+                <h2 className="dm-sheet-h">
+                  <Sparkles size={18} /> Repair proposal
+                </h2>
                 <button
-                  key={r[0]}
-                  onClick={() => pickRepo(r)}
-                  style={{ animationDelay: `${i * 0.06}s` }}
-                  className="dm-in dm-press dm-hv flex w-full items-center gap-3 rounded-2xl p-3"
+                  className="dm-ib sm dm-press"
+                  aria-label="Copy proposal"
+                  onClick={() => copy(repairText, "Proposal")}
                 >
-                  <div
-                    className="grid h-10 w-10 place-items-center rounded-xl"
-                    style={{ background: G14, color: G }}
-                  >
-                    <Github size={20} />
-                  </div>
-                  <div>
-                    <div className="font-semibold">{r[0]}</div>
-                    <div className="text-sm text-zinc-400">{r[1]}</div>
-                  </div>
+                  <Copy size={16} />
                 </button>
-              ))}
-            </div>
-          )}
-          {sheetView === "files" && project && (
-            <div>
-              <h2 className="text-2xl font-bold tracking-tight">
-                Project files
-              </h2>
-              <p className="mb-3 mt-1 text-zinc-400">
-                Tap a file to ask about it in chat.
+              </div>
+              <p className="dm-sheet-note">
+                Review carefully. DevMind has not modified your GitHub
+                repository.
               </p>
-              <div className="overflow-y-auto" style={{ maxHeight: "52dvh" }}>
-                <Tree
-                  nodes={tree}
-                  base=""
-                  depth={0}
-                  open={open}
-                  toggle={toggle}
-                  pick={pickFile}
-                  sel={focus ? "/" + focus : null}
-                />
+              <div className="dm-sheet-scroll">
+                <pre className="dm-repair">{repairText}</pre>
+              </div>
+              <div className="dm-two">
+                <button
+                  className="dm-btn o dm-press"
+                  onClick={() => openSheet("code")}
+                >
+                  Back to code
+                </button>
+                <button className="dm-btn w dm-press" onClick={closeSheet}>
+                  Done
+                </button>
               </div>
             </div>
           )}
         </div>
       </div>
 
-      <div
-        className={`dm-glass pointer-events-none fixed left-1/2 z-60 -translate-x-1/2 rounded-full border border-white/10 bg-zinc-900/80 px-4 py-2.5 text-sm font-medium backdrop-blur-xl transition-all duration-300 ${toast ? "opacity-100" : "-translate-y-2 opacity-0"}`}
-        style={{ top: "calc(72px + env(safe-area-inset-top, 0px))" }}
-      >
-        {toast || "\u00A0"}
-      </div>
+      {consentOpen && repo && (
+        <div className="dm-consent" role="presentation">
+          <section
+            className="dm-dialog dm-glass"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="dm-consent-title"
+          >
+            <span className="dm-dialog-ic">
+              <LockKeyhole size={22} />
+            </span>
+            <h2 id="dm-consent-title">
+              Allow DevMind to access this repository?
+            </h2>
+            <p>
+              DevMind will use the selected repository and branch to answer your
+              request. Repository source code may be sent to the configured AI
+              service for analysis. Access is read-only; DevMind will not change
+              your GitHub files.
+            </p>
+            <div className="dm-dialog-repo">
+              <FaGithub size={16} />
+              <span className="dm-truncate">{repo.full_name}</span>
+              <span className="dm-dialog-branch">
+                <GitBranch size={12} /> {branch}
+              </span>
+            </div>
+            <div className="dm-two">
+              <button className="dm-btn o dm-press" onClick={denyAccess}>
+                Deny
+              </button>
+              <button className="dm-btn g dm-press" onClick={allowAccess}>
+                <Check size={17} /> Allow access
+              </button>
+            </div>
+            <small>
+              This approval applies only to this repository and branch in this
+              session. Switching repositories or disconnecting GitHub revokes
+              it.
+            </small>
+          </section>
+        </div>
+      )}
+
+      {notice && (
+        <button
+          className={`dm-toast dm-glass ${notice.type}`}
+          role="status"
+          onClick={() => setNotice(null)}
+        >
+          {notice.type === "error" ? (
+            <AlertCircle size={18} />
+          ) : notice.type === "success" ? (
+            <Check size={18} />
+          ) : (
+            <Info size={18} />
+          )}
+          <span>{notice.text}</span>
+          <X size={15} className="dm-dim-ic" />
+        </button>
+      )}
     </div>
   );
 }
 
-/* Custom rules that Tailwind utilities can't express. Move into your global CSS if you prefer. */
-const CSS = `
+/* ------------------------------------------------------------------ */
+/*  Styles: black + white, NVIDIA green accent, mobile first            */
+/* ------------------------------------------------------------------ */
+const styles = `
 html{-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%;overscroll-behavior:none}
-.dm{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text",Inter,"Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-optical-sizing:auto}
-.dm button{touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;text-align:left}
-.dm textarea{font-size:16px}
-.dm-drawer{width:min(86vw,320px)}
-@media (min-width:1024px){.dm-drawer{width:290px;flex:none;transform:none!important;background:#000}}
-.dm-sheet{max-width:560px}
-.dm-press{transition:transform .12s ease-out,background-color .12s}
-.dm-press:active{transform:scale(.97)}
-.dm-focus:focus-within{border-color:rgba(118,185,0,.6);box-shadow:0 0 0 4px rgba(118,185,0,.14)}
-.dm-caret{display:inline-block;width:7px;height:1em;margin-left:3px;vertical-align:-2px;border-radius:2px;background:#76B900;animation:dmBlink 1s steps(2) infinite}
-@keyframes dmBlink{50%{opacity:0}}
-@keyframes dmIn{from{opacity:0;transform:translateY(12px) scale(.98);filter:blur(6px)}}
-.dm-in{animation:dmIn .45s cubic-bezier(.2,.9,.2,1) both}
-@keyframes dmNudge{40%{transform:scale(1.03)}}
-.dm-nudge{animation:dmNudge .5s cubic-bezier(.2,.9,.2,1)}
-@media (hover:hover) and (pointer:fine){.dm-hv:hover{background-color:rgba(255,255,255,.16)}.dm-hvw:hover{background-color:#e4e4e7}}
-@media (prefers-reduced-motion:reduce){.dm-in,.dm-nudge{animation:none}.dm-caret{animation:none}}
-@media (prefers-reduced-transparency:reduce){.dm-glass{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:#0a0a0a!important}}
+body{margin:0;background:#000}
+.dm-app{--g:#76B900;--gd:rgba(118,185,0,.14);--t:#f5f5f7;--m:#8e8e93;--l:rgba(255,255,255,.1);--s:rgba(255,255,255,.06);--s2:rgba(255,255,255,.1);--ease:cubic-bezier(.2,.9,.2,1);
+display:flex;width:100%;height:var(--dm-vh,100dvh);background:#000;color:var(--t);overflow:hidden;
+font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.45;-webkit-font-smoothing:antialiased;font-optical-sizing:auto}
+:where(.dm-app) *{box-sizing:border-box;margin:0}
+:where(.dm-app) :where(button,[role=button]){font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+:where(.dm-app) button:disabled{opacity:.4;cursor:not-allowed}
+:where(.dm-app) :where(input,textarea,select){font:inherit;font-size:16px;color:inherit}
+:where(.dm-app) :focus-visible{outline:2px solid var(--g);outline-offset:2px}
+.dm-glass{background:rgba(18,18,20,.72);backdrop-filter:blur(26px) saturate(180%);-webkit-backdrop-filter:blur(26px) saturate(180%)}
+.dm-press{transition:transform .14s var(--ease),background-color .14s,opacity .14s}
+.dm-press:active:not(:disabled){transform:scale(.96)}
+.dm-truncate{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dm-spin{animation:dmSpin .9s linear infinite;flex:none}@keyframes dmSpin{to{rotate:360deg}}
+.dm-orb{display:grid;place-items:center;flex:none;border-radius:50%;background:var(--g);color:#000}
+.dm-dot{width:8px;height:8px;border-radius:50%;background:#55555a;flex:none;display:inline-block}.dm-dot.on{background:var(--g);box-shadow:0 0 0 3px rgba(118,185,0,.18)}
+.dm-state{display:flex;align-items:center;justify-content:center;gap:9px;padding:28px 16px;color:var(--m);font-size:14px;text-align:center}
+.dm-empty{flex:1;min-height:190px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;text-align:center;color:var(--m);font-size:14px}
+.dm-empty strong{color:var(--t);font-size:16px;letter-spacing:-.02em}.dm-empty>span:not(.dm-empty-ic){max-width:260px;line-height:1.55}
+.dm-empty-ic{width:52px;height:52px;display:grid;place-items:center;border-radius:16px;background:var(--gd);color:var(--g);margin-bottom:6px}
+/* buttons */
+.dm-btn{min-height:50px;display:flex;align-items:center;justify-content:center;gap:9px;padding:0 20px;border-radius:16px;font-weight:600;letter-spacing:-.01em;width:100%}
+.dm-btn.g{background:var(--g);color:#000}.dm-btn.w{background:#fff;color:#000}.dm-btn.o{background:var(--s);border:1px solid var(--l)}
+.dm-inline-btn{width:auto;margin-top:8px}
+.dm-ib{width:44px;height:44px;flex:none;display:grid;place-items:center;border-radius:50%;background:var(--s);border:1px solid var(--l)}.dm-ib.sm{width:40px;height:40px}
+.dm-pill{height:40px;display:inline-flex;align-items:center;gap:6px;padding:0 14px;border-radius:99px;background:var(--s);border:1px solid var(--l);font-size:14px;font-weight:600;flex:none}
+.dm-pill.g{background:var(--g);border-color:var(--g);color:#000}
+/* repository drawer */
+.dm-drawer{position:fixed;top:0;bottom:0;left:0;z-index:40;width:min(86vw,340px);display:flex;flex-direction:column;gap:6px;padding:calc(18px + env(safe-area-inset-top,0px)) 14px calc(14px + env(safe-area-inset-bottom,0px));border-right:1px solid var(--l);box-shadow:24px 0 60px rgba(0,0,0,.5);transform:translate3d(-100%,0,0);will-change:transform;touch-action:pan-y;background:rgba(14,14,16,.88)}
+.dm-dscrim{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.6);opacity:0;pointer-events:none;touch-action:none}
+.dm-brand{display:flex;align-items:center;gap:10px;padding:0 4px 8px;font-size:21px;font-weight:700;letter-spacing:-.04em}
+.dm-side-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+.dm-search{display:flex;align-items:center;gap:9px;height:44px;padding:0 14px;border-radius:14px;background:var(--s);border:1px solid var(--l);color:var(--m);margin:2px 0}
+.dm-search.off{opacity:.5}
+.dm-search:focus-within{border-color:rgba(118,185,0,.6);box-shadow:0 0 0 4px rgba(118,185,0,.14)}
+.dm-search input{flex:1;min-width:0;background:none;border:0;outline:0}.dm-search input::placeholder{color:var(--m)}
+.dm-repos{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.dm-repo{display:flex;align-items:center;gap:8px;min-height:64px;padding:8px 10px 8px 6px;border-radius:18px;background:var(--s);border:1px solid var(--l)}
+.dm-repo.on{border-color:rgba(118,185,0,.55);background:var(--gd)}
+.dm-repo-main{flex:1;min-width:0;min-height:48px;display:flex;align-items:center;gap:11px;padding:0 4px;border-radius:14px}
+.dm-repo-ic{width:38px;height:38px;display:grid;place-items:center;border-radius:12px;background:#fff;color:#000;flex:none}
+.dm-repo-tx{flex:1;min-width:0;display:flex;flex-direction:column}
+.dm-repo-tx strong{font-size:15px;font-weight:600;letter-spacing:-.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dm-repo-tx small{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--m);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dm-import{flex:none;height:38px;display:inline-flex;align-items:center;gap:5px;padding:0 15px;border-radius:99px;background:var(--g);color:#000;font-size:14px;font-weight:700}
+.dm-import.done{background:transparent;color:var(--g);border:1px solid rgba(118,185,0,.5);padding:0 11px}
+.dm-conn{display:flex;flex-direction:column;gap:10px;margin-top:10px;padding:14px;border-radius:18px;background:var(--s);border:1px solid var(--l)}
+.dm-conn-row{display:flex;gap:10px;align-items:flex-start}.dm-conn-row .dm-dot{margin-top:6px}.dm-conn-row>div{display:flex;flex-direction:column;min-width:0}
+.dm-conn-row strong{font-size:14px;font-weight:600;overflow-wrap:anywhere}.dm-conn-row small{font-size:12px;color:var(--m)}
+/* shell */
+.dm-shell{flex:1;min-width:0;height:100%;display:flex;flex-direction:column}
+.dm-top{flex:none;display:flex;align-items:center;gap:10px;padding:calc(8px + env(safe-area-inset-top,0px)) 14px 8px;border-bottom:1px solid var(--l);z-index:5}
+.dm-title{flex:1;min-width:0;text-align:center;font-weight:650;letter-spacing:-.02em;font-size:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dm-title.two{display:flex;flex-direction:column;text-align:left;line-height:1.25}.dm-title.two strong{font-size:16px;font-weight:650;letter-spacing:-.02em}.dm-title.two span{font-size:12px;color:var(--m);font-weight:500}
+.dm-avatar{width:40px;height:40px;border-radius:50%;background:#fff;color:#000;display:grid;place-items:center;font-weight:700;font-size:15px;overflow:hidden;flex:none}.dm-avatar img{width:100%;height:100%;object-fit:cover}
+.dm-content{flex:1;min-height:0;position:relative}
+.dm-scroll{height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+/* before connecting */
+.dm-home{max-width:560px;margin:0 auto;min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:36px 20px 40px}
+.dm-home h1{margin-top:20px;font-size:clamp(2.1rem,9vw,2.9rem);line-height:1.04;letter-spacing:-.04em;font-weight:700}
+.dm-home>p{margin:12px 0 28px;max-width:34ch;color:var(--m);font-size:16px;line-height:1.5}
+.dm-cta{display:flex;flex-direction:column;gap:10px;width:100%;max-width:380px}
+.dm-trust{display:flex;align-items:flex-start;gap:8px;margin-top:20px;max-width:34ch;color:var(--m);font-size:13px;text-align:left}.dm-trust svg{color:var(--g);flex:none;margin-top:2px}
+/* after connecting: stacked cards */
+.dm-stack{height:100%;display:flex;flex-direction:column;gap:10px;padding:10px 12px 12px}
+.dm-card{display:flex;flex-direction:column;min-height:0;border-radius:26px;border:1px solid var(--l);background:rgba(255,255,255,.035);overflow:hidden}
+.dm-files{flex:0 0 auto}.dm-files.open{flex:0 0 40%}
+.dm-files-body{display:flex;flex-direction:column;flex:1;min-height:0}
+.dm-aicard{flex:1;min-width:0}
+.dm-ph-ai{border-bottom:1px solid var(--l);min-height:62px}
+@media (max-width:699px){.dm-files:not(.open) .dm-files-body{display:none}.dm-app.kb .dm-files{display:none}}
+.dm-ph{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px 8px 18px;min-height:58px}
+.dm-ph h2{font-size:20px;letter-spacing:-.03em;font-weight:700}.dm-ph p{font-size:12px;color:var(--m)}
+.dm-collapse{display:flex;align-items:center;gap:8px;min-height:44px}
+.dm-chev2{color:var(--m);transition:rotate .25s var(--ease);rotate:-90deg}.dm-chev2.open{rotate:0deg}
+.dm-tools{display:flex;align-items:center;gap:8px;flex:none}
+.dm-branch{display:flex;align-items:center;gap:6px;height:40px;padding:0 12px;border-radius:99px;background:var(--s);border:1px solid var(--l);color:var(--m);max-width:160px}.dm-branch.off{opacity:.5}
+.dm-branch select{appearance:none;-webkit-appearance:none;background:none;border:0;outline:0;min-width:0;max-width:90px;color:var(--t);font-weight:600;text-overflow:ellipsis}.dm-branch option{background:#111}
+.dm-pad{padding:0 12px 4px}
+.dm-pscroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:4px 8px 10px;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column}
+.dm-tree-item{width:100%;min-height:46px;display:flex;align-items:center;gap:9px;padding-right:10px;border-radius:12px;font-size:15px;color:#d1d1d6}
+.dm-tree-item.is-selected{background:var(--gd);color:#fff}
+.dm-chev{color:#636366;flex:none;transition:rotate .2s var(--ease)}.dm-chev.open{rotate:90deg}.dm-chev-gap{width:14px;flex:none}
+.dm-ic-dir{color:var(--g);flex:none}.dm-ic-file{color:var(--m);flex:none}
+/* code */
+.dm-ph-code{padding-left:16px}.dm-ph-code h2{font-size:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dm-ph-code p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dm-file-tx{min-width:0;flex:1}
+.dm-meta{flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 16px;font-size:12px;color:var(--m);border-top:1px solid var(--l);border-bottom:1px solid var(--l);background:rgba(255,255,255,.03)}
+.dm-meta>span:first-child{display:flex;align-items:center;gap:7px}
+.dm-code-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;background:#050505;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column}
+.dm-source{display:flex;min-width:max-content;padding:12px 0 28px;font:12.5px/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.dm-source pre{margin:0;font:inherit}.dm-ln{position:sticky;left:0;min-width:46px;padding:0 10px;text-align:right;color:#4a4a4f;background:#050505;border-right:1px solid var(--l);user-select:none;-webkit-user-select:none}
+.dm-src{padding:0 16px;color:#e5e5ea;white-space:pre;tab-size:2;user-select:text;-webkit-user-select:text}
+/* chat */
+.dm-ai-title{display:flex;align-items:center;gap:10px;min-width:0}.dm-ai-title h2{font-size:18px}
+.dm-thread{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:4px 16px 10px;-webkit-overflow-scrolling:touch}
+.dm-thread-in{max-width:720px;min-height:100%;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+.dm-welcome{display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px;margin:auto;padding:24px 8px;color:var(--m);max-width:34ch}
+.dm-welcome .dm-chips{flex-wrap:wrap;justify-content:center;overflow:visible;padding:4px 0 0}
+.dm-msg{display:flex;gap:10px;animation:dmIn .4s var(--ease) both}.dm-msg.user{justify-content:flex-end}
+@keyframes dmIn{from{opacity:0;transform:translateY(8px)}}
+.dm-bubble{max-width:85%;padding:10px 16px;border-radius:22px 22px 6px 22px;background:var(--g);color:#000;font-weight:500;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
+.dm-ai-text{min-width:0;flex:1;padding-top:3px;color:#e5e5ea;line-height:1.6;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}.dm-ai-text p{white-space:pre-wrap;margin-bottom:6px}.dm-ai-text p:last-child{margin-bottom:0}
+.dm-ai-text strong{color:#fff}.dm-warn{font-size:13px;color:var(--m)}
+.dm-thinking{display:flex;align-items:center;gap:9px;color:var(--m)}
+.dm-codeblock{margin:8px 0;padding:12px 14px;border-radius:14px;background:#050505;border:1px solid var(--l);overflow-x:auto;font:12.5px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#e5e5ea}
+.dm-chips{flex:none;display:flex;gap:8px;overflow-x:auto;padding:2px 14px 8px;touch-action:pan-x pan-y;scrollbar-width:none}.dm-chips::-webkit-scrollbar{display:none}
+.dm-chip{flex:none;height:40px;padding:0 15px;border-radius:99px;background:var(--s);border:1px solid var(--l);font-size:14px;font-weight:600}
+.dm-thread.empty{display:none}
+.dm-mascot-wrap{flex:none;display:flex;flex-direction:column;padding:0 10px 10px;min-width:0}
+.dm-mascot-wrap.center{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:8px 12px 12px}
+.dm-mascot-in{width:100%;max-width:720px;margin:0 auto}
+.dm-mascot-wrap.center .dm-mascot-in{margin-top:auto;margin-bottom:auto}
+.dm-ctx-row{margin:0 4px 8px}
+.dm-mascot-in .dm-chips{flex-wrap:wrap;justify-content:center;overflow:visible;padding:12px 0 0}
+.dm-composer-wrap{flex:none;padding:0 10px 10px}
+.dm-composer{margin:0 auto;max-width:720px;padding:12px 12px 10px 18px;border-radius:26px;background:rgba(28,28,30,.85);border:1px solid var(--l);transition:border-color .2s,box-shadow .2s}
+.dm-composer:focus-within{border-color:rgba(118,185,0,.6);box-shadow:0 0 0 4px rgba(118,185,0,.14)}
+.dm-ctx{display:inline-flex;align-items:center;gap:6px;min-width:0;margin:0;padding:4px 10px;border-radius:99px;background:var(--gd);color:var(--g);font-size:12px;font-weight:600}.dm-ctx svg{flex:none}
+.dm-comp-row{display:flex;align-items:flex-start;gap:10px}
+.dm-composer textarea{flex:1;min-width:0;resize:none;background:none;border:0;outline:0;line-height:1.45;padding:2px 0;max-height:120px}.dm-composer textarea::placeholder{color:var(--m)}
+.dm-send{width:42px;height:42px;flex:none;display:grid;place-items:center;border-radius:50%;background:var(--g);color:#000}.dm-send:disabled{background:var(--s2);color:#636366}
+.dm-comp-foot{display:flex;align-items:center;gap:8px;margin-top:6px;min-width:0}
+.dm-model{display:inline-flex;align-items:center;gap:7px;flex:none;font-size:13px;font-weight:600;color:var(--m)}
+.dm-disc{display:flex;align-items:center;justify-content:center;gap:5px;margin-top:8px;font-size:12px;color:#6e6e73}
+/* sheet */
+.dm-sw{position:fixed;inset:0;z-index:50;pointer-events:none}
+.dm-scrim{position:absolute;inset:0;background:rgba(0,0,0,.6);opacity:0}
+.dm-sheet{position:absolute;left:0;right:0;bottom:-1px;margin:0 auto;max-width:640px;max-height:92dvh;display:flex;flex-direction:column;transform:translate3d(0,100%,0);will-change:transform;border:1px solid var(--l);border-bottom:0;border-radius:28px 28px 0 0;box-shadow:0 -24px 60px rgba(0,0,0,.5);padding:0 0 env(safe-area-inset-bottom,0px);background:rgba(22,22,24,.9);overflow:hidden}
+.dm-sheet.tall{height:92dvh;max-width:920px}
+.dm-grab{flex:none;touch-action:none;padding:10px 0 12px;cursor:grab}.dm-grab i{display:block;width:40px;height:5px;border-radius:9px;background:rgba(255,255,255,.3);margin:0 auto}
+.dm-sheet-code{flex:1;min-height:0;display:flex;flex-direction:column}
+.dm-sheet-body{display:flex;flex-direction:column;min-height:0;padding:0 16px 16px}
+.dm-sec-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.dm-sheet-h{display:flex;align-items:center;gap:8px;font-size:24px;letter-spacing:-.035em;font-weight:700}.dm-sheet-h svg{color:var(--g)}
+.dm-sheet-note{color:var(--m);font-size:13px;margin-bottom:10px}
+.dm-sheet-scroll{overflow-y:auto;overscroll-behavior:contain;max-height:52dvh;-webkit-overflow-scrolling:touch;margin-bottom:6px}
+.dm-repair{margin:0;padding:14px;border-radius:16px;background:#050505;border:1px solid var(--l);white-space:pre-wrap;overflow-wrap:anywhere;font:12.5px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#e5e5ea;margin-bottom:12px;user-select:text;-webkit-user-select:text}
+.dm-two{display:flex;gap:10px}
+.dm-actions{flex:none;display:flex;gap:8px;overflow-x:auto;padding:0 16px 10px;touch-action:pan-x pan-y;scrollbar-width:none}.dm-actions::-webkit-scrollbar{display:none}
+.dm-lang{padding:3px 10px;border-radius:99px;background:var(--s2);font-size:12px;font-weight:600;color:var(--m)}
+.dm-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:2px 0 12px}
+.dm-stats span{display:flex;flex-direction:column;padding:10px 12px;border-radius:16px;background:var(--s);border:1px solid var(--l)}.dm-stats strong{font-size:22px;letter-spacing:-.03em;line-height:1.1}.dm-stats small{font-size:12px;color:var(--m)}
+.dm-finding{padding:12px 14px;border-radius:16px;background:var(--s);border:1px solid var(--l);margin-bottom:8px}.dm-finding p{margin-top:6px;font-size:14px;line-height:1.5;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
+.dm-find-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--m)}.dm-find-rule{margin-left:auto;font-family:ui-monospace,monospace}
+.dm-sev{padding:2px 9px;border-radius:99px;font-weight:700;background:var(--s2);color:var(--t);text-transform:capitalize}
+.dm-sev.error,.dm-sev.high,.dm-sev.critical{background:#fff;color:#000}.dm-sev.warning,.dm-sev.medium{background:var(--gd);color:var(--g)}
+.dm-consent{position:fixed;inset:0;z-index:70;display:grid;place-items:center;padding:20px;background:rgba(0,0,0,.72);animation:dmIn .3s var(--ease)}
+.dm-dialog{width:min(460px,100%);padding:24px;border-radius:28px;border:1px solid var(--l);box-shadow:0 24px 90px rgba(0,0,0,.6);background:rgba(22,22,24,.92);display:flex;flex-direction:column;gap:12px}
+.dm-dialog-ic{width:46px;height:46px;display:grid;place-items:center;border-radius:14px;background:var(--gd);color:var(--g)}
+.dm-dialog h2{font-size:22px;line-height:1.2;letter-spacing:-.035em;font-weight:700}.dm-dialog p{font-size:14px;line-height:1.6;color:#aeaeb2}
+.dm-dialog-repo{display:flex;align-items:center;gap:8px;padding:12px;border-radius:14px;background:var(--s);border:1px solid var(--l);font-size:14px;font-weight:600}.dm-dialog-branch{display:flex;align-items:center;gap:4px;margin-left:auto;flex:none;font-size:12px;color:var(--m)}
+.dm-dialog small{font-size:12px;color:var(--m);line-height:1.5}
+/* toast */
+.dm-toast{position:fixed;z-index:60;left:50%;translate:-50% 0;top:calc(env(safe-area-inset-top,0px) + 66px);width:max-content;max-width:min(92vw,460px);display:flex;align-items:flex-start;gap:10px;padding:12px 14px;border-radius:18px;border:1px solid var(--l);box-shadow:0 12px 40px rgba(0,0,0,.5);font-size:14px;animation:dmToast .4s var(--ease) both}
+.dm-toast>span{flex:1;min-width:0;overflow-wrap:anywhere}.dm-toast>svg:first-child{flex:none;margin-top:1px}
+.dm-toast.success>svg:first-child{color:var(--g)}.dm-toast.error>svg:first-child{color:#ff6b61}.dm-toast.info>svg:first-child{color:#fff}
+.dm-dim-ic{color:#636366;flex:none}
+@keyframes dmToast{from{opacity:0;transform:translateY(-12px) scale(.97)}}
+/* hover only where hover exists */
+@media (hover:hover) and (pointer:fine){
+  .dm-ib:hover:not(:disabled),.dm-pill:hover:not(:disabled),.dm-repo:hover,.dm-tree-item:hover,.dm-chip:hover,.dm-btn.o:hover{background:var(--s2)}
+  .dm-btn.g:hover,.dm-import:not(.done):hover,.dm-pill.g:hover:not(:disabled){background:#8ad400}.dm-btn.w:hover{background:#e5e5ea}
+  :where(.dm-app) :where(input,textarea,select){font-size:14px}
+}
+/* tablets, landscape phones and desktop: Files on the left, DevMind AI on the right, as sketched */
+@media (min-width:700px){
+  .dm-stack{flex-direction:row;gap:12px;padding:12px 16px 16px}
+  .dm-files,.dm-files.open{flex:0 0 clamp(260px,34%,360px)}
+  .dm-collapse{pointer-events:none}.dm-collapse .dm-chev2{display:none}
+  .dm-ph h2{font-size:19px}
+  .dm-tree-item{min-height:38px;font-size:14px;border-radius:10px}
+}
+@media (prefers-reduced-motion:reduce){.dm-app *{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+@media (prefers-reduced-transparency:reduce){.dm-glass{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:#111!important}}
 `;

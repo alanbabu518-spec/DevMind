@@ -4,6 +4,7 @@ import {
   verifyMagicLink,
   getCurrentUser,
   logout,
+  completeOnboarding,
 } from "./auth.controller";
 import { requireAuthentication } from "../../middleware/auth.middleware";
 import { tokenBucketMiddleware } from "../../middleware/token-bucket.middleware";
@@ -15,6 +16,7 @@ router.post("/magic-link", tokenBucketMiddleware, requestMagicLink);
 router.get("/verify-magic-link", verifyMagicLink);
 router.get("/me", requireAuthentication, getCurrentUser);
 router.post("/logout", logout);
+router.post("/onboarding/complete", requireAuthentication, completeOnboarding);
 
 router.use("/oauth", oauthRoutes);
 

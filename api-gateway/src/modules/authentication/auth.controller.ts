@@ -4,12 +4,13 @@ import {
   requestMagicLink as requestMagicLinkService,
   verifyMagicLink as verifyMagicLinkService,
 } from "./auth.service";
-
 import { createSession, deleteSession } from "./session.service";
 import { prisma } from "../../lib/prisma";
 
 const SESSION_COOKIE_NAME = "devmind_session";
 const SESSION_COOKIE_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
+
+const ALLOWED_PLANS = ["Free", "Pro", "Team"] as const;
 
 export async function requestMagicLink(
   req: Request,
@@ -77,9 +78,17 @@ export async function verifyMagicLink(
       maxAge: SESSION_COOKIE_MAX_AGE,
     });
 
+    // Read the persisted onboarding status from PostgreSQL.
+    const user = await prisma.user.findUnique({
+      where: { id: result.user.id },
+      select: { onboardingCompleted: true },
+    });
+
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5174";
 
-    const redirectUrl = new URL("/devmind/onboarding", frontendUrl);
+    const destination = user?.onboardingCompleted ? "/Home" : "/onboarding";
+
+    const redirectUrl = new URL(destination, frontendUrl);
     redirectUrl.searchParams.set("auth", "success");
 
     res.redirect(redirectUrl.toString());
@@ -112,6 +121,8 @@ export async function getCurrentUser(
         name: true,
         emailVerified: true,
         createdAt: true,
+        onboardingCompleted: true,
+        selectedPlan: true,
       },
     });
 
@@ -136,14 +147,14 @@ export async function getCurrentUser(
 }
 
 export async function logout(req: Request, res: Response): Promise<void> {
-  const sessionToken = req.cookies?.devmind_session;
+  const sessionToken = req.cookies?.[SESSION_COOKIE_NAME];
 
   try {
     if (typeof sessionToken === "string") {
       await deleteSession(sessionToken);
     }
 
-    res.clearCookie("devmind_session", {
+    res.clearCookie(SESSION_COOKIE_NAME, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
@@ -158,6 +169,57 @@ export async function logout(req: Request, res: Response): Promise<void> {
     res.status(500).json({
       status: "error",
       message: "Unable to log out. Please try again.",
+    });
+  }
+}
+
+export async function completeOnboarding(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  if (!req.userId) {
+    res.status(401).json({
+      status: "error",
+      message: "Authentication required.",
+    });
+    return;
+  }
+
+  const selectedPlan: unknown = req.body?.selectedPlan;
+
+  if (
+    typeof selectedPlan !== "string" ||
+    !ALLOWED_PLANS.some((plan) => plan === selectedPlan)
+  ) {
+    res.status(400).json({
+      status: "error",
+      message: "Please select a valid plan.",
+    });
+    return;
+  }
+
+  try {
+    const user = await prisma.user.update({
+      where: { id: req.userId },
+      data: {
+        selectedPlan,
+        onboardingCompleted: true,
+      },
+      select: {
+        id: true,
+        onboardingCompleted: true,
+        selectedPlan: true,
+      },
+    });
+
+    res.status(200).json({
+      status: "success",
+      data: { user },
+    });
+  } catch {
+    res.status(500).json({
+      status: "error",
+      message: "Unable to save onboarding progress.",
     });
   }
 }

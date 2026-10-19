@@ -110,7 +110,7 @@ export default function DevMindHero() {
             className="mt-9 flex flex-wrap items-center gap-4"
           >
             <Link
-              to="/devmind/login"
+              to="/login"
               className="group inline-flex items-center gap-3 rounded-full bg-[#76B900] py-1.5 pl-6 pr-1.5 text-sm font-semibold text-[#101509] transition-colors duration-200 hover:bg-[#91d51b] sm:text-base"
             >
               Get started
