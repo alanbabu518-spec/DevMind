@@ -84,7 +84,7 @@ type GithubStatus = {
 type Notice = { type: "success" | "error" | "info"; text: string };
 type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
 type RepairResult = JsonRecord;
-type SheetKind = "code" | "repair" | "analysis" | null;
+type SheetKind = "code" | "repair" | "analysis" | "rule" | null;
 type ConsentAction = "chat" | "repair" | "analyze";
 type DragOpts = {
   els: HTMLElement[];
@@ -115,6 +115,8 @@ const DEPTH_NOTE: Record<string, string> = {
   medium: "Give a clear, balanced answer with the key details.",
   high: "Be thorough: reason step by step and cite specific file paths from the evidence.",
 };
+const FORMAT_NOTE =
+  "Format the answer so it is easy to read: start with a one-sentence summary; use numbered lists for steps and ordered findings; use short bullet points for details; use **bold** for key terms and `backticks` for file names, functions and code; keep paragraphs to 2-3 sentences; put any code in fenced code blocks.";
 const DEVMIND_MODELS: AIModel[] = [
   {
     id: "devmind",
@@ -395,7 +397,94 @@ function Orb({ size = 30 }: { size?: number }) {
     </span>
   );
 }
-/* Renders ``` fenced blocks as code, everything else as paragraphs */
+/* Renders AI replies: headings, numbered lists, bullet points, **bold**, `code` and fenced code blocks */
+type ListItem = { text: string; sub: string[] };
+type Block =
+  | { t: "h"; text: string }
+  | { t: "p"; text: string }
+  | { t: "ol"; start: number; items: ListItem[] }
+  | { t: "ul"; items: ListItem[] };
+
+function parseBlocks(src: string): Block[] {
+  const blocks: Block[] = [];
+  let para: string[] = [];
+  const flush = () => {
+    if (para.length) {
+      blocks.push({ t: "p", text: para.join(" ") });
+      para = [];
+    }
+  };
+  for (const raw of src.split("\n")) {
+    const line = raw.replace(/\s+$/, "");
+    if (!line.trim()) {
+      flush();
+      continue;
+    }
+    const h = /^\s{0,3}#{1,4}\s+(.*)$/.exec(line);
+    if (h) {
+      flush();
+      blocks.push({ t: "h", text: h[1] });
+      continue;
+    }
+    const ol = /^(\s*)(\d+)[.)]\s+(.*)$/.exec(line);
+    const ul = /^(\s*)[-*•]\s+(.*)$/.exec(line);
+    const last = blocks[blocks.length - 1];
+    if (ol || ul) {
+      flush();
+      const indent = (ol ? ol[1] : ul![1]).length;
+      const text = ol ? ol[3] : ul![2];
+      if (
+        indent >= 2 &&
+        last &&
+        (last.t === "ol" || last.t === "ul") &&
+        last.items.length
+      ) {
+        last.items[last.items.length - 1].sub.push(text);
+      } else if (ol) {
+        if (last && last.t === "ol") last.items.push({ text, sub: [] });
+        else
+          blocks.push({
+            t: "ol",
+            start: Number(ol[2]),
+            items: [{ text, sub: [] }],
+          });
+      } else if (last && last.t === "ul") last.items.push({ text, sub: [] });
+      else blocks.push({ t: "ul", items: [{ text, sub: [] }] });
+      continue;
+    }
+    // a wrapped, indented line continues the previous list item
+    if (
+      !para.length &&
+      /^\s{2,}\S/.test(line) &&
+      last &&
+      (last.t === "ol" || last.t === "ul") &&
+      last.items.length
+    ) {
+      last.items[last.items.length - 1].text += " " + line.trim();
+      continue;
+    }
+    para.push(line.trim());
+  }
+  flush();
+  return blocks;
+}
+function Inline({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, i) =>
+        part.length > 4 && part.startsWith("**") && part.endsWith("**") ? (
+          <strong key={i}>{part.slice(2, -2)}</strong>
+        ) : part.length > 2 && part.startsWith("`") && part.endsWith("`") ? (
+          <code key={i} className="dm-ic-code">
+            {part.slice(1, -1)}
+          </code>
+        ) : (
+          <span key={i}>{part}</span>
+        ),
+      )}
+    </>
+  );
+}
 function Rich({ text }: { text: string }): ReactNode {
   const bits = text.split(/```[\w-]*\n?([\s\S]*?)```/g);
   return (
@@ -405,29 +494,78 @@ function Rich({ text }: { text: string }): ReactNode {
           <pre key={i} className="dm-codeblock">
             <code>{b.replace(/\n$/, "")}</code>
           </pre>
-        ) : b.trim() ? (
-          <p key={i}>{b.trim()}</p>
-        ) : null,
+        ) : (
+          parseBlocks(b).map((blk, j) => {
+            const k = `${i}-${j}`;
+            if (blk.t === "h")
+              return (
+                <h3 key={k} className="dm-md-h">
+                  <Inline text={blk.text} />
+                </h3>
+              );
+            if (blk.t === "p")
+              return (
+                <p key={k}>
+                  <Inline text={blk.text} />
+                </p>
+              );
+            const List = blk.t === "ol" ? "ol" : "ul";
+            return (
+              <List
+                key={k}
+                className={blk.t === "ol" ? "dm-ol" : "dm-ul"}
+                style={
+                  blk.t === "ol"
+                    ? { counterReset: `dm-n ${blk.start - 1}` }
+                    : undefined
+                }
+              >
+                {blk.items.map((it, n) => (
+                  <li key={n}>
+                    <div className="dm-li-body">
+                      <Inline text={it.text} />
+                      {it.sub.length > 0 && (
+                        <ul className="dm-ul sub">
+                          {it.sub.map((sx, m) => (
+                            <li key={m}>
+                              <div className="dm-li-body">
+                                <Inline text={sx} />
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </List>
+            );
+          })
+        ),
       )}
     </>
   );
 }
-function Finding({ f }: { f: unknown }) {
+function Finding({ f, n }: { f: unknown; n?: number }) {
   const r = asRecord(f);
   const sev = asString(r.severity, asString(r.level, asString(r.type)));
   const msg = asString(r.message, asString(r.description, asString(r.title)));
-  const line = r.line != null ? `Line ${String(r.line)}` : "";
   const rule = asString(r.rule, asString(r.rule_id, asString(r.id)));
-  if (!msg)
+  const src = asString(r.source);
+  const evidence = typeof r.evidence === "string" ? r.evidence : "";
+  if (!msg && !rule)
     return <pre className="dm-repair">{JSON.stringify(f, null, 2)}</pre>;
   return (
     <div className="dm-finding">
       <div className="dm-find-top">
+        {n != null && <span className="dm-num">{n}</span>}
         {sev && <span className={`dm-sev ${sev.toLowerCase()}`}>{sev}</span>}
-        {line && <span>{line}</span>}
+        {r.line != null && <span>Line {String(r.line)}</span>}
+        {src && <span>{src}</span>}
         {rule && <span className="dm-find-rule">{rule}</span>}
       </div>
-      <p>{msg}</p>
+      {msg && <p>{msg}</p>}
+      {evidence && <pre className="dm-evidence">{evidence}</pre>}
     </div>
   );
 }
@@ -1040,8 +1178,8 @@ export default function DevMind() {
     const visited = new Set<string>();
     const snippets: string[] = [];
     let totalChars = 0;
-    const maxFiles = 30,
-      maxChars = 45000;
+    const maxFiles = 15,
+    maxChars = 15000;
 
     while (
       queue.length &&
@@ -1110,7 +1248,7 @@ export default function DevMind() {
           if (!content.trim()) continue;
           const clipped = content.slice(
             0,
-            Math.min(3500, maxChars - totalChars),
+            Math.min(2000, maxChars - totalChars),
           );
           snippets.push(`\n--- FILE: ${entry.path} ---\n${clipped}`);
           totalChars += clipped.length;
@@ -1141,7 +1279,7 @@ export default function DevMind() {
     setSending(true);
     try {
       const repositoryContext = await fetchRepositoryContext(repo, branch);
-      const context = `You are reviewing the selected GitHub repository. Use only the evidence below and clearly state when evidence is insufficient. Do not claim files were inspected unless included below.\nRepository: ${repo.full_name}\nBranch: ${branch}\nRepository source excerpts (bounded scan; not guaranteed to include every file):\n${repositoryContext}${selectedFile ? `\nCurrently selected file: ${selectedFile.path}\nSelected file source:\n${sourceCode.slice(0, 10000)}` : ""}\n\n${DEPTH_NOTE[effortRef.current] ?? DEPTH_NOTE.medium}\n\nUser question: ${message}`;
+      const context = `You are reviewing the selected GitHub repository. Use only the evidence below and clearly state when evidence is insufficient. Do not claim files were inspected unless included below.\nRepository: ${repo.full_name}\nBranch: ${branch}\nRepository source excerpts (bounded scan; not guaranteed to include every file):\n${repositoryContext}${selectedFile ? `\nCurrently selected file: ${selectedFile.path}\nSelected file source:\n${sourceCode.slice(0, 10000)}` : ""}\n\n${DEPTH_NOTE[effortRef.current] ?? DEPTH_NOTE.medium}\n${FORMAT_NOTE}\n\nUser question: ${message}`;
       const payload = asRecord(
         await request<unknown>("/api/ai/chat", {
           method: "POST",
@@ -1254,7 +1392,10 @@ export default function DevMind() {
     }
   };
 
-  const requestRepair = async (consentApproved = false) => {
+  const requestRepair = async (
+    consentApproved = false,
+    chosenRule?: string,
+  ) => {
     if (!selectedFile || !sourceCode.trim() || repairing) {
       notify(
         "Choose a file with readable source code before requesting a repair.",
@@ -1270,6 +1411,39 @@ export default function DevMind() {
       return;
     }
     if (!consentApproved && needConsent("repair")) return;
+    const analysisFindings = Array.isArray(analysisResult?.findings)
+      ? analysisResult.findings.map((item) => asRecord(item))
+      : [];
+    if (!analysisFindings.length) {
+      notify(
+        "Run Analyze first so the repair can target a real scanner finding.",
+        "info",
+      );
+      return;
+    }
+    const availableRules = Array.from(
+      new Set(
+        analysisFindings.map((f) => asString(f.rule).trim()).filter(Boolean),
+      ),
+    );
+    if (!availableRules.length) {
+      notify(
+        "The analysis result does not contain a scanner rule that can be repaired.",
+        "info",
+      );
+      return;
+    }
+    const rule =
+      chosenRule ??
+      (availableRules.length === 1 ? availableRules[0] : undefined);
+    if (!rule) {
+      openSheet("rule");
+      return;
+    } // let the person pick the exact rule
+    if (!availableRules.includes(rule)) {
+      notify("Choose an exact rule ID from the analysis findings.", "error");
+      return;
+    }
     setRepairing(true);
     setRepairResult(null);
     try {
@@ -1280,7 +1454,7 @@ export default function DevMind() {
             language: "python",
             source_code: sourceCode,
             filename: selectedFile.name,
-            rule: "manual-review",
+            rule,
           }),
         }),
       );
@@ -1290,6 +1464,10 @@ export default function DevMind() {
           : asRecord(payload.repair ?? payload.data ?? payload),
       );
       openSheet("repair");
+      notify(
+        "Repair response received. Review it before applying any changes.",
+        "success",
+      );
     } catch (error) {
       notify(
         `Repair request failed. ${error instanceof Error ? error.message : ""}`,
@@ -1300,8 +1478,8 @@ export default function DevMind() {
     }
   };
 
-  const repairText = useMemo(() => {
-    if (!repairResult) return "";
+  const repair = useMemo(() => {
+    if (!repairResult) return { text: "", isCode: true };
     for (const key of [
       "proposed_code",
       "proposedCode",
@@ -1309,15 +1487,17 @@ export default function DevMind() {
       "fixedCode",
       "code",
       "content",
-      "suggestion",
-      "explanation",
-      "message",
     ]) {
       if (typeof repairResult[key] === "string")
-        return repairResult[key] as string;
+        return { text: repairResult[key] as string, isCode: true };
     }
-    return JSON.stringify(repairResult, null, 2);
+    for (const key of ["suggestion", "explanation", "message"]) {
+      if (typeof repairResult[key] === "string")
+        return { text: repairResult[key] as string, isCode: false };
+    }
+    return { text: JSON.stringify(repairResult, null, 2), isCode: true };
   }, [repairResult]);
+  const repairText = repair.text;
 
   const analysisSummary = asRecord(analysisResult?.summary);
   const rawFindings = analysisResult?.findings;
@@ -1326,6 +1506,21 @@ export default function DevMind() {
   const limitations: string[] = Array.isArray(rawLimits)
     ? rawLimits.map(String)
     : [];
+  const explanationRecord = asRecord(analysisResult?.ai_explanations);
+  const explanations: JsonRecord[] = Array.isArray(
+    explanationRecord.explanations,
+  )
+    ? explanationRecord.explanations.map((item) => asRecord(item))
+    : Array.isArray(analysisResult?.explanations)
+      ? analysisResult.explanations.map((item) => asRecord(item))
+      : [];
+  const repairRules = Object.entries(
+    findings.reduce<Record<string, number>>((acc, f) => {
+      const rule = asString(asRecord(f).rule).trim();
+      if (rule) acc[rule] = (acc[rule] ?? 0) + 1;
+      return acc;
+    }, {}),
+  ).map(([rule, count]) => ({ rule, count }));
 
   const copy = (value: string, label: string) => {
     if (!navigator.clipboard) {
@@ -1335,6 +1530,97 @@ export default function DevMind() {
     void navigator.clipboard
       .writeText(value)
       .then(() => notify(`${label} copied.`, "success"));
+  };
+  const downloadAnalysisReport = (format: "markdown" | "json") => {
+    if (!analysisResult) return;
+    const summary = asRecord(analysisResult.summary);
+    const rawList = Array.isArray(analysisResult.findings)
+      ? analysisResult.findings.map((item) => asRecord(item))
+      : [];
+    const report = {
+      generated_at: new Date().toISOString(),
+      repository: repo?.full_name ?? null,
+      branch: branch || null,
+      filename: selectedFile?.path ?? selectedFile?.name ?? null,
+      language: asString(analysisResult.language, "unknown"),
+      analysis_level: asString(analysisResult.analysis_level, "unknown"),
+      status: asString(analysisResult.status, "unknown"),
+      analyzers: Array.isArray(analysisResult.analyzers)
+        ? analysisResult.analyzers
+        : [],
+      summary,
+      findings: rawList,
+      ai_explanations: explanations,
+      limitations: Array.isArray(analysisResult.limitations)
+        ? analysisResult.limitations
+        : [],
+      note: "Generated from read-only analysis. No repository files were changed.",
+    };
+    const markdown = [
+      "# DevMind Code Analysis Report",
+      "",
+      `- Generated: ${report.generated_at}`,
+      `- Repository: ${report.repository ?? "Not connected"}`,
+      `- Branch: ${report.branch ?? "Unknown"}`,
+      `- File: ${report.filename ?? "Unknown"}`,
+      `- Language: ${report.language}`,
+      `- Analysis level: ${report.analysis_level}`,
+      `- Status: ${report.status}`,
+      `- Analyzers: ${report.analyzers.map(String).join(", ") || "Not reported"}`,
+      "",
+      "## Summary",
+      ...Object.entries(summary).map(
+        ([key, value]) => `- ${key.replace(/_/g, " ")}: ${String(value)}`,
+      ),
+      "",
+      "## Findings",
+      ...(rawList.length
+        ? rawList.flatMap((finding, index) => [
+            `### ${index + 1}. ${asString(finding.rule, "Unclassified finding")}`,
+            `- Severity: ${asString(finding.severity, "unknown")}`,
+            `- Line: ${String(finding.line ?? "Not reported")}`,
+            `- Message: ${asString(finding.message, "No message provided")}`,
+            `- Source: ${asString(finding.source, "Not reported")}`,
+            `- Evidence: ${asString(finding.evidence, "Not provided")}`,
+            "",
+          ])
+        : ["No findings were reported.", ""]),
+      "## AI Explanations",
+      ...(explanations.length
+        ? explanations.flatMap((item, index) => [
+            `### ${index + 1}. ${asString(item.rule, "Finding explanation")}`,
+            `- Root cause: ${asString(item.root_cause, "Not provided")}`,
+            `- Impact: ${asString(item.impact, "Not provided")}`,
+            `- Suggested fix: ${asString(item.suggested_fix, "Not provided")}`,
+            `- Confidence: ${String(item.confidence ?? "Not reported")}`,
+            "",
+          ])
+        : ["No AI explanations were returned.", ""]),
+      "## Limitations",
+      ...(report.limitations.length
+        ? report.limitations.map((item) => `- ${String(item)}`)
+        : ["- No limitations were reported."]),
+      "",
+      `> ${report.note}`,
+      "",
+    ].join("\n");
+    const content =
+      format === "json" ? JSON.stringify(report, null, 2) : markdown;
+    const mime =
+      format === "json"
+        ? "application/json;charset=utf-8"
+        : "text/markdown;charset=utf-8";
+    const blobUrl = URL.createObjectURL(new Blob([content], { type: mime }));
+    const anchor = document.createElement("a");
+    const safeName = (selectedFile?.name || "analysis")
+      .replace(/[^a-zA-Z0-9._-]/g, "_")
+      .replace(/\.[^.]+$/, "");
+    anchor.href = blobUrl;
+    anchor.download = `devmind-${safeName}-report.${format === "json" ? "json" : "md"}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
   };
   const refreshAll = () => {
     void loadRepos();
@@ -1946,6 +2232,8 @@ export default function DevMind() {
                     ["Errors", analysisSummary.errors],
                     ["Warnings", analysisSummary.warnings],
                     ["Security", analysisSummary.security_issues],
+                    ["Quality", analysisSummary.code_quality_issues],
+                    ["Potential secrets", analysisSummary.potential_secrets],
                   ] as const
                 ).map(([label, v]) => (
                   <span key={label}>
@@ -1954,18 +2242,73 @@ export default function DevMind() {
                   </span>
                 ))}
               </div>
+              <div className="dm-export">
+                <button
+                  className="dm-pill dm-press"
+                  onClick={() => downloadAnalysisReport("markdown")}
+                >
+                  <FileText size={15} /> Export Markdown
+                </button>
+                <button
+                  className="dm-pill dm-press"
+                  onClick={() => downloadAnalysisReport("json")}
+                >
+                  <FileJson size={15} /> Export JSON
+                </button>
+              </div>
               <div className="dm-sheet-scroll">
+                <h3 className="dm-sub-h">Findings</h3>
                 {findings.length ? (
-                  findings.map((f, i) => <Finding key={i} f={f} />)
+                  findings.map((f, i) => <Finding key={i} f={f} n={i + 1} />)
                 ) : (
                   <div className="dm-state">
                     No findings were reported by the configured analyzers.
                   </div>
                 )}
-                {limitations.length > 0 && (
+                <h3 className="dm-sub-h">
+                  AI explanations and suggested fixes
+                </h3>
+                {explanations.length ? (
+                  explanations.map((x, i) => (
+                    <div key={i} className="dm-finding">
+                      <div className="dm-find-top">
+                        <span className="dm-num">{i + 1}</span>
+                        <strong className="dm-find-title">
+                          {asString(x.rule, "Finding explanation")}
+                        </strong>
+                      </div>
+                      <ul className="dm-points">
+                        <li>
+                          <b>Root cause:</b>{" "}
+                          {asString(x.root_cause, "Not provided")}
+                        </li>
+                        <li>
+                          <b>Impact:</b> {asString(x.impact, "Not provided")}
+                        </li>
+                        <li>
+                          <b>Suggested fix:</b>{" "}
+                          {asString(x.suggested_fix, "Not provided")}
+                        </li>
+                      </ul>
+                      <small className="dm-dim">
+                        Confidence: {String(x.confidence ?? "not reported")}
+                      </small>
+                    </div>
+                  ))
+                ) : (
                   <p className="dm-sheet-note">
-                    Limitations: {limitations.join("; ")}
+                    No AI explanations were returned for this analysis.
                   </p>
+                )}
+                {limitations.length > 0 && (
+                  <>
+                    <h3 className="dm-sub-h">Limitations</h3>
+                    <ul className="dm-limits">
+                      {limitations.map((l, i) => (
+                        <li key={i}>{l}</li>
+                      ))}
+                    </ul>
+                  </>
                 )}
               </div>
               <div className="dm-two">
@@ -1977,6 +2320,46 @@ export default function DevMind() {
                 </button>
                 <button className="dm-btn w dm-press" onClick={closeSheet}>
                   Done
+                </button>
+              </div>
+            </div>
+          )}
+          {sheet === "rule" && (
+            <div className="dm-sheet-body">
+              <h2 className="dm-sheet-h">
+                <Sparkles size={18} /> Choose a finding
+              </h2>
+              <p className="dm-sheet-note">
+                Pick the exact scanner rule DevMind should propose a repair for.
+              </p>
+              <div className="dm-sheet-scroll">
+                {repairRules.map(({ rule, count }) => (
+                  <button
+                    key={rule}
+                    className="dm-rule dm-press"
+                    disabled={repairing}
+                    onClick={() => void requestRepair(true, rule)}
+                  >
+                    <span className="dm-rule-tx">
+                      <strong>{rule}</strong>
+                      <small>
+                        {count} finding{count === 1 ? "" : "s"}
+                      </small>
+                    </span>
+                    {repairing ? (
+                      <Spin />
+                    ) : (
+                      <ChevronRight size={16} className="dm-dim-ic" />
+                    )}
+                  </button>
+                ))}
+              </div>
+              <div className="dm-two">
+                <button
+                  className="dm-btn o dm-press"
+                  onClick={() => openSheet("code")}
+                >
+                  Back to code
                 </button>
               </div>
             </div>
@@ -2000,7 +2383,13 @@ export default function DevMind() {
                 repository.
               </p>
               <div className="dm-sheet-scroll">
-                <pre className="dm-repair">{repairText}</pre>
+                {repair.isCode ? (
+                  <pre className="dm-repair">{repairText}</pre>
+                ) : (
+                  <div className="dm-ai-text dm-repair-text">
+                    <Rich text={repairText} />
+                  </div>
+                )}
               </div>
               <div className="dm-two">
                 <button
@@ -2087,11 +2476,13 @@ export default function DevMind() {
 /*  Styles: black + white, NVIDIA green accent, mobile first            */
 /* ------------------------------------------------------------------ */
 const styles = `
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
 html{-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%;overscroll-behavior:none}
 body{margin:0;background:#000}
 .dm-app{--g:#76B900;--gd:rgba(118,185,0,.14);--t:#f5f5f7;--m:#8e8e93;--l:rgba(255,255,255,.1);--s:rgba(255,255,255,.06);--s2:rgba(255,255,255,.1);--ease:cubic-bezier(.2,.9,.2,1);
 display:flex;width:100%;height:var(--dm-vh,100dvh);background:#000;color:var(--t);overflow:hidden;
-font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.45;-webkit-font-smoothing:antialiased;font-optical-sizing:auto}
+--mono:"JetBrains Mono",var(--mono);
+font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;font-optical-sizing:auto}
 :where(.dm-app) *{box-sizing:border-box;margin:0}
 :where(.dm-app) :where(button,[role=button]){font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 :where(.dm-app) button:disabled{opacity:.4;cursor:not-allowed}
@@ -2168,7 +2559,7 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",sy
 .dm-branch select{appearance:none;-webkit-appearance:none;background:none;border:0;outline:0;min-width:0;max-width:90px;color:var(--t);font-weight:600;text-overflow:ellipsis}.dm-branch option{background:#111}
 .dm-pad{padding:0 12px 4px}
 .dm-pscroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:4px 8px 10px;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column}
-.dm-tree-item{width:100%;min-height:46px;display:flex;align-items:center;gap:9px;padding-right:10px;border-radius:12px;font-size:15px;color:#d1d1d6}
+.dm-tree-item{width:100%;min-height:46px;display:flex;align-items:center;gap:9px;padding-right:10px;border-radius:12px;font-size:16px;color:#d1d1d6}
 .dm-tree-item.is-selected{background:var(--gd);color:#fff}
 .dm-chev{color:#636366;flex:none;transition:rotate .2s var(--ease)}.dm-chev.open{rotate:90deg}.dm-chev-gap{width:14px;flex:none}
 .dm-ic-dir{color:var(--g);flex:none}.dm-ic-file{color:var(--m);flex:none}
@@ -2178,7 +2569,7 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",sy
 .dm-meta{flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 16px;font-size:12px;color:var(--m);border-top:1px solid var(--l);border-bottom:1px solid var(--l);background:rgba(255,255,255,.03)}
 .dm-meta>span:first-child{display:flex;align-items:center;gap:7px}
 .dm-code-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;background:#050505;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column}
-.dm-source{display:flex;min-width:max-content;padding:12px 0 28px;font:12.5px/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.dm-source{display:flex;min-width:max-content;padding:12px 0 28px;font:12.5px/1.75 var(--mono)}
 .dm-source pre{margin:0;font:inherit}.dm-ln{position:sticky;left:0;min-width:46px;padding:0 10px;text-align:right;color:#4a4a4f;background:#050505;border-right:1px solid var(--l);user-select:none;-webkit-user-select:none}
 .dm-src{padding:0 16px;color:#e5e5ea;white-space:pre;tab-size:2;user-select:text;-webkit-user-select:text}
 /* chat */
@@ -2189,11 +2580,26 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",sy
 .dm-welcome .dm-chips{flex-wrap:wrap;justify-content:center;overflow:visible;padding:4px 0 0}
 .dm-msg{display:flex;gap:10px;animation:dmIn .4s var(--ease) both}.dm-msg.user{justify-content:flex-end}
 @keyframes dmIn{from{opacity:0;transform:translateY(8px)}}
-.dm-bubble{max-width:85%;padding:10px 16px;border-radius:22px 22px 6px 22px;background:var(--g);color:#000;font-weight:500;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
-.dm-ai-text{min-width:0;flex:1;padding-top:3px;color:#e5e5ea;line-height:1.6;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}.dm-ai-text p{white-space:pre-wrap;margin-bottom:6px}.dm-ai-text p:last-child{margin-bottom:0}
-.dm-ai-text strong{color:#fff}.dm-warn{font-size:13px;color:var(--m)}
+.dm-bubble{max-width:85%;font-size:16px;line-height:1.55;padding:10px 16px;border-radius:22px 22px 6px 22px;background:var(--g);color:#000;font-weight:500;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
+.dm-ai-text{min-width:0;flex:1;padding-top:2px;color:#ececf0;font-size:16px;line-height:1.7;letter-spacing:-.005em;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}.dm-ai-text p{margin:0 0 12px}.dm-ai-text>*:last-child{margin-bottom:0}
+.dm-ai-text strong,.dm-ai-text b{color:#fff;font-weight:650}.dm-warn{font-size:13px;color:var(--m)}
+.dm-md-h{margin:18px 0 8px;font-size:18px;font-weight:700;letter-spacing:-.02em;line-height:1.3;color:#fff}.dm-ai-text>.dm-md-h:first-child{margin-top:0}
+.dm-ol,.dm-ul{list-style:none;padding:0;margin:0 0 14px;display:flex;flex-direction:column;gap:10px}
+.dm-ol>li,.dm-ul>li{display:flex;gap:12px;align-items:flex-start}
+.dm-ol>li{counter-increment:dm-n}
+.dm-ol>li::before{content:counter(dm-n);flex:none;width:26px;height:26px;margin-top:1px;border-radius:50%;display:grid;place-items:center;background:var(--gd);color:var(--g);font-size:13px;font-weight:700;line-height:1}
+.dm-ul>li::before{content:"";flex:none;width:7px;height:7px;margin-top:.7em;border-radius:50%;background:var(--g)}
+.dm-ul.sub{margin:8px 0 2px;gap:6px}.dm-ul.sub>li::before{width:5px;height:5px;margin-top:.75em;background:#8e8e93}
+.dm-li-body{min-width:0;flex:1}
+.dm-ic-code{font-family:var(--mono);font-size:.86em;padding:2px 7px;border-radius:7px;background:rgba(255,255,255,.1);color:#d9f99d;overflow-wrap:anywhere}
+.dm-repair-text{padding:2px 2px 8px}
+.dm-num{width:24px;height:24px;flex:none;border-radius:50%;display:inline-grid;place-items:center;background:var(--gd);color:var(--g);font-size:12px;font-weight:700}
+.dm-points{list-style:none;padding:0;margin:10px 0 8px;display:flex;flex-direction:column;gap:8px}
+.dm-points li{position:relative;padding-left:16px;font-size:15px;line-height:1.55;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
+.dm-points li::before{content:"";position:absolute;left:0;top:.62em;width:6px;height:6px;border-radius:50%;background:var(--g)}
+.dm-points b{color:#fff}
 .dm-thinking{display:flex;align-items:center;gap:9px;color:var(--m)}
-.dm-codeblock{margin:8px 0;padding:12px 14px;border-radius:14px;background:#050505;border:1px solid var(--l);overflow-x:auto;font:12.5px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#e5e5ea}
+.dm-codeblock{margin:8px 0;padding:12px 14px;border-radius:14px;background:#050505;border:1px solid var(--l);overflow-x:auto;font:12.5px/1.6 var(--mono);color:#e5e5ea}
 .dm-chips{flex:none;display:flex;gap:8px;overflow-x:auto;padding:2px 14px 8px;touch-action:pan-x pan-y;scrollbar-width:none}.dm-chips::-webkit-scrollbar{display:none}
 .dm-chip{flex:none;height:40px;padding:0 15px;border-radius:99px;background:var(--s);border:1px solid var(--l);font-size:14px;font-weight:600}
 .dm-thread.empty{display:none}
@@ -2220,19 +2626,26 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",sy
 .dm-sheet.tall{height:92dvh;max-width:920px}
 .dm-grab{flex:none;touch-action:none;padding:10px 0 12px;cursor:grab}.dm-grab i{display:block;width:40px;height:5px;border-radius:9px;background:rgba(255,255,255,.3);margin:0 auto}
 .dm-sheet-code{flex:1;min-height:0;display:flex;flex-direction:column}
-.dm-sheet-body{display:flex;flex-direction:column;min-height:0;padding:0 16px 16px}
+.dm-sheet-body{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;padding:0 16px 16px}
 .dm-sec-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
 .dm-sheet-h{display:flex;align-items:center;gap:8px;font-size:24px;letter-spacing:-.035em;font-weight:700}.dm-sheet-h svg{color:var(--g)}
-.dm-sheet-note{color:var(--m);font-size:13px;margin-bottom:10px}
-.dm-sheet-scroll{overflow-y:auto;overscroll-behavior:contain;max-height:52dvh;-webkit-overflow-scrolling:touch;margin-bottom:6px}
-.dm-repair{margin:0;padding:14px;border-radius:16px;background:#050505;border:1px solid var(--l);white-space:pre-wrap;overflow-wrap:anywhere;font:12.5px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#e5e5ea;margin-bottom:12px;user-select:text;-webkit-user-select:text}
+.dm-sheet-note{color:var(--m);font-size:14px;line-height:1.55;margin-bottom:12px}
+.dm-sheet-scroll{overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;margin-bottom:10px;flex:1 1 auto;min-height:0}
+.dm-repair{margin:0;padding:14px;border-radius:16px;background:#050505;border:1px solid var(--l);white-space:pre-wrap;overflow-wrap:anywhere;font:12.5px/1.65 var(--mono);color:#e5e5ea;margin-bottom:12px;user-select:text;-webkit-user-select:text}
 .dm-two{display:flex;gap:10px}
 .dm-actions{flex:none;display:flex;gap:8px;overflow-x:auto;padding:0 16px 10px;touch-action:pan-x pan-y;scrollbar-width:none}.dm-actions::-webkit-scrollbar{display:none}
 .dm-lang{padding:3px 10px;border-radius:99px;background:var(--s2);font-size:12px;font-weight:600;color:var(--m)}
-.dm-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:2px 0 12px}
+.dm-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:2px 0 10px}
+.dm-export{display:flex;gap:8px;overflow-x:auto;margin:0 0 10px;scrollbar-width:none;touch-action:pan-x pan-y}.dm-export::-webkit-scrollbar{display:none}
+.dm-sub-h{margin:14px 2px 8px;font-size:16px;font-weight:700;letter-spacing:-.02em}.dm-sub-h:first-child{margin-top:2px}
+.dm-find-title{display:block;font-size:15px;letter-spacing:-.01em}.dm-dim{color:var(--m)}
+.dm-evidence{margin:8px 0 0;padding:10px 12px;border-radius:12px;background:#050505;border:1px solid var(--l);white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.55 var(--mono);color:#d1d1d6;user-select:text;-webkit-user-select:text}
+.dm-limits{padding-left:20px;color:var(--m);font-size:13px;line-height:1.6}
+.dm-rule{display:flex;align-items:center;gap:12px;width:100%;min-height:60px;padding:10px 14px;margin-bottom:8px;border-radius:16px;background:var(--s);border:1px solid var(--l)}
+.dm-rule-tx{flex:1;min-width:0;display:flex;flex-direction:column}.dm-rule-tx strong{font-size:15px;font-weight:600;overflow-wrap:anywhere}.dm-rule-tx small{font-size:12px;color:var(--m)}
 .dm-stats span{display:flex;flex-direction:column;padding:10px 12px;border-radius:16px;background:var(--s);border:1px solid var(--l)}.dm-stats strong{font-size:22px;letter-spacing:-.03em;line-height:1.1}.dm-stats small{font-size:12px;color:var(--m)}
-.dm-finding{padding:12px 14px;border-radius:16px;background:var(--s);border:1px solid var(--l);margin-bottom:8px}.dm-finding p{margin-top:6px;font-size:14px;line-height:1.5;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
-.dm-find-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--m)}.dm-find-rule{margin-left:auto;font-family:ui-monospace,monospace}
+.dm-finding{padding:12px 14px;border-radius:16px;background:var(--s);border:1px solid var(--l);margin-bottom:8px}.dm-finding p{margin-top:8px;font-size:15px;line-height:1.55;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
+.dm-find-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--m)}.dm-find-rule{margin-left:auto;font-family:ui-monospace,monospace}
 .dm-sev{padding:2px 9px;border-radius:99px;font-weight:700;background:var(--s2);color:var(--t);text-transform:capitalize}
 .dm-sev.error,.dm-sev.high,.dm-sev.critical{background:#fff;color:#000}.dm-sev.warning,.dm-sev.medium{background:var(--gd);color:var(--g)}
 .dm-consent{position:fixed;inset:0;z-index:70;display:grid;place-items:center;padding:20px;background:rgba(0,0,0,.72);animation:dmIn .3s var(--ease)}
@@ -2254,6 +2667,7 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",sy
   :where(.dm-app) :where(input,textarea,select){font-size:14px}
 }
 /* tablets, landscape phones and desktop: Files on the left, DevMind AI on the right, as sketched */
+@media (min-width:560px){.dm-stats{grid-template-columns:repeat(6,minmax(0,1fr))}}
 @media (min-width:700px){
   .dm-stack{flex-direction:row;gap:12px;padding:12px 16px 16px}
   .dm-files,.dm-files.open{flex:0 0 clamp(260px,34%,360px)}

@@ -2,8 +2,10 @@ import express, { Request, Response } from "express";
 import {
   analyzeCodeWithAI,
   calculateReadinessWithAI,
+  requestRepairWithAI,
   sendMessageToAI,
 } from "./aiService.js";
+import type { RepairRequest } from "./aiService.js";
 import { requireAuthentication } from "../../middleware/auth.middleware.js";
 import {
   enqueueCodeAnalysis,
@@ -153,11 +155,9 @@ router.post(
         typeof language !== "string" ||
         language.trim().toLowerCase() !== "python"
       ) {
-        res
-          .status(400)
-          .json({
-            error: "Currently, only Python readiness analysis is supported",
-          });
+        res.status(400).json({
+          error: "Currently, only Python readiness analysis is supported",
+        });
         return;
       }
       if (
@@ -183,6 +183,68 @@ router.post(
       res
         .status(502)
         .json({ error: "AI readiness service is currently unavailable" });
+    }
+  },
+);
+
+router.post(
+  "/repair",
+  requireAuthentication,
+  async (req: Request<{}, {}, RepairRequest>, res: Response) => {
+    try {
+      const { language, source_code, filename, rule } = req.body;
+
+      if (language !== "python") {
+        res
+          .status(400)
+          .json({ error: "Currently, only Python repair is supported" });
+        return;
+      }
+      if (typeof source_code !== "string" || !source_code.trim()) {
+        res.status(400).json({ error: "Non-empty source_code is required" });
+        return;
+      }
+      if (source_code.length > 20000) {
+        res
+          .status(413)
+          .json({ error: "Source code must not exceed 20000 characters" });
+        return;
+      }
+      if (
+        typeof filename !== "string" ||
+        !filename.trim() ||
+        filename.length > 100 ||
+        filename.includes("/") ||
+        filename.includes("\\") ||
+        !filename.toLowerCase().endsWith(".py")
+      ) {
+        res
+          .status(400)
+          .json({
+            error:
+              "filename must be a simple .py filename of at most 100 characters",
+          });
+        return;
+      }
+      if (typeof rule !== "string" || !rule.trim() || rule.length > 80) {
+        res.status(400).json({ error: "A valid scanner rule is required" });
+        return;
+      }
+
+      const result = await requestRepairWithAI({
+        language: "python",
+        source_code,
+        filename,
+        rule: rule.trim(),
+      });
+      res.status(result.status).json(result.data);
+    } catch (error) {
+      console.error("AI repair request failed:", error);
+      const message = error instanceof Error ? error.message : "Unknown error";
+      const status = message.includes("not configured") ? 503 : 502;
+      res
+        .status(status)
+        .json({ error: "AI repair service is currently unavailable" });
     }
   },
 );
