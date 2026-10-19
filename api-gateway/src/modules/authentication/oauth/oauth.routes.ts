@@ -7,6 +7,7 @@ import {
   createOAuthState,
   type OAuthProvider,
 } from "./oauth-state.service";
+import { prisma } from "../../../lib/prisma";
 
 const router = Router();
 
@@ -33,7 +34,7 @@ function frontendRedirect(
 ): string {
   const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5174";
 
-  const url = new URL("/devmind/onboarding", frontendUrl);
+  const url = new URL("/onboarding", frontendUrl);
   url.searchParams.set("oauth", status);
   url.searchParams.set("provider", provider);
 
@@ -131,7 +132,23 @@ const completeOAuthLogin: RequestHandler = async (req, res, next) => {
       maxAge: SESSION_EXPIRY_SECONDS * 1000,
     });
 
-    res.redirect(frontendRedirect("success", provider));
+    const account = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: {
+        onboardingCompleted: true,
+      },
+    });
+
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5174";
+
+    const destination = account?.onboardingCompleted ? "/Home" : "/onboarding";
+
+    const redirectUrl = new URL(destination, frontendUrl);
+
+    redirectUrl.searchParams.set("oauth", "success");
+    redirectUrl.searchParams.set("provider", provider);
+
+    res.redirect(redirectUrl.toString());
   } catch (error) {
     next(error);
   }

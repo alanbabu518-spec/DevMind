@@ -9,24 +9,28 @@ datasource db {
 }
 
 model User {
-  id            String   @id @default(uuid())
-  email         String   @unique
-  name          String?
-  emailVerified DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                  String   @id @default(uuid())
+  email               String   @unique
+  name                String?
+  emailVerified       DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
-  projects      Project[]
-  conversations Conversation[]
-  accounts      Account[]
+  onboardingCompleted Boolean  @default(false)
+  selectedPlan        String?
+
+  projects            Project[]
+  conversations       Conversation[]
+  accounts            Account[]
 }
 
 model Account {
-  id                String   @id @default(uuid())
-  provider          String
-  providerAccountId String
-  userId            String
-  createdAt         DateTime @default(now())
+  id                         String   @id @default(uuid())
+  provider                   String
+  providerAccountId           String
+  userId                     String
+  createdAt                  DateTime @default(now())
+  githubAccessTokenEncrypted String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

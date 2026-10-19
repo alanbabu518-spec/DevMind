@@ -53,6 +53,7 @@ describe("Authentication API", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.NODE_ENV = "test";
+    process.env.FRONTEND_URL = "http://localhost:5174";
   });
 
   describe("POST /api/auth/magic-link", () => {
@@ -139,7 +140,7 @@ describe("Authentication API", () => {
 
       expect(response.status).toBe(302);
       expect(response.headers.location).toBe(
-        "http://localhost:5174/devmind/onboarding?auth=success",
+        "http://localhost:5174/onboarding?auth=success",
       );
 
       expect(verifyMagicLinkService).toHaveBeenCalledWith("valid-token");
@@ -177,7 +178,7 @@ describe("Authentication API", () => {
 
       expect(response.status).toBe(302);
       expect(response.headers.location).toBe(
-        "http://localhost:5174/devmind/onboarding?auth=success",
+        "http://localhost:5174/onboarding?auth=success",
       );
 
       expect(createSession).toHaveBeenCalledWith("user-1");

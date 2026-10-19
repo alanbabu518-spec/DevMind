@@ -1,14 +1,23 @@
+
 FROM node:22-alpine AS build
 
 WORKDIR /app
 
 COPY package*.json ./
+COPY prisma ./prisma
+COPY prisma.config.ts ./prisma.config.ts
+
 RUN npm ci
+
+# Provide a temporary URL for Prisma Client generation only.
+# This does not connect to or modify the database.
+RUN DATABASE_URL="postgresql://devmind_user:placeholder@localhost:5432/devmind?schema=public" npx prisma generate
 
 COPY tsconfig.json ./
 COPY src ./src
 
 RUN npm run build
+
 
 FROM node:22-alpine AS runtime
 
@@ -17,6 +26,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 COPY package*.json ./
+COPY prisma ./prisma
+COPY prisma.config.ts ./prisma.config.ts
+
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/dist ./dist
