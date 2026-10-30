@@ -28,12 +28,60 @@ type GitHubRepository = {
   updated_at: string;
 };
 
+/**
+ * An error the client is allowed to see. The routes turn it into a proper
+ * HTTP status + a stable `code` instead of a generic 500.
+ */
+export class GitHubIntegrationError extends Error {
+  statusCode: number;
+  code: string;
+
+  constructor(message: string, statusCode: number, code: string) {
+    super(message);
+    this.name = "GitHubIntegrationError";
+    this.statusCode = statusCode;
+    this.code = code;
+  }
+}
+
 function githubHeaders(token: string): HeadersInit {
   return {
     Accept: "application/vnd.github+json",
     Authorization: `Bearer ${token}`,
     "X-GitHub-Api-Version": "2022-11-28",
   };
+}
+
+/** Maps a failed GitHub API response to a typed, client-safe error. */
+function failFromResponse(response: Response, fallback: string): never {
+  if (response.status === 401) {
+    throw new GitHubIntegrationError(
+      "GitHub rejected the saved connection. Please reconnect GitHub.",
+      409,
+      "github_token_invalid",
+    );
+  }
+
+  if (
+    response.status === 403 &&
+    response.headers.get("x-ratelimit-remaining") === "0"
+  ) {
+    throw new GitHubIntegrationError(
+      "GitHub rate limit reached. Please try again shortly.",
+      429,
+      "github_rate_limited",
+    );
+  }
+
+  if (response.status === 404) {
+    throw new GitHubIntegrationError(
+      "Not found on GitHub, or you do not have access to it.",
+      404,
+      "github_not_found",
+    );
+  }
+
+  throw new GitHubIntegrationError(fallback, 502, "github_upstream_error");
 }
 
 async function getGitHubProfile(
@@ -45,7 +93,7 @@ async function getGitHubProfile(
   });
 
   if (!response.ok) {
-    throw new Error("Unable to verify the GitHub account");
+    failFromResponse(response, "Unable to verify the GitHub account");
   }
 
   return (await response.json()) as GitHubUserResponse;
@@ -68,17 +116,31 @@ async function getConnection(userId: string) {
 export async function connectGitHubAccount(
   userId: string,
   profile: GitHubConnectionProfile,
-): Promise<{ username: string }> {
+): Promise<{ username: string; transferred: boolean }> {
   if (!userId || !profile.providerAccountId || !profile.accessToken) {
-    throw new Error("GitHub connection details are incomplete");
+    throw new GitHubIntegrationError(
+      "GitHub connection details are incomplete",
+      400,
+      "github_authorization_failed",
+    );
   }
 
+  // Verify the GitHub identity using the access token.
   const githubProfile = await getGitHubProfile(profile.accessToken);
 
   if (String(githubProfile.id) !== profile.providerAccountId) {
-    throw new Error("GitHub account identity could not be verified");
+    throw new GitHubIntegrationError(
+      "GitHub account identity could not be verified",
+      400,
+      "github_identity_unverified",
+    );
   }
 
+  // The user just proved they own this GitHub account by completing OAuth and
+  // the token was verified against GitHub above, so the connection may belong
+  // to whichever DevMind account they are signed in to right now.
+  // If it was linked to another DevMind account (e.g. an older email), the
+  // link MOVES to this account instead of failing.
   const existingAccount = await prisma.account.findUnique({
     where: {
       provider_providerAccountId: {
@@ -91,49 +153,41 @@ export async function connectGitHubAccount(
     },
   });
 
-  const existingSignInAccount = await prisma.account.findUnique({
-    where: {
-      provider_providerAccountId: {
-        provider: "github",
-        providerAccountId: profile.providerAccountId,
-      },
-    },
-    select: {
-      userId: true,
-    },
-  });
-
-  if (existingSignInAccount && existingSignInAccount.userId !== userId) {
-    throw new Error("This GitHub identity belongs to another DevMind account");
-  }
-
-  if (existingAccount && existingAccount.userId !== userId) {
-    throw new Error(
-      "This GitHub account is already connected to another DevMind account",
-    );
-  }
-
+  const transferred = Boolean(
+    existingAccount && existingAccount.userId !== userId,
+  );
   const encryptedToken = encryptGitHubToken(profile.accessToken);
 
-  await prisma.account.upsert({
-    where: {
-      provider_providerAccountId: {
+  await prisma.$transaction([
+    // One connected GitHub account per DevMind user: replace any other one.
+    prisma.account.deleteMany({
+      where: {
+        userId,
+        provider: "github-connect",
+        NOT: { providerAccountId: profile.providerAccountId },
+      },
+    }),
+    prisma.account.upsert({
+      where: {
+        provider_providerAccountId: {
+          provider: "github-connect",
+          providerAccountId: profile.providerAccountId,
+        },
+      },
+      create: {
         provider: "github-connect",
         providerAccountId: profile.providerAccountId,
+        userId,
+        githubAccessTokenEncrypted: encryptedToken,
       },
-    },
-    create: {
-      provider: "github-connect",
-      providerAccountId: profile.providerAccountId,
-      userId,
-      githubAccessTokenEncrypted: encryptedToken,
-    },
-    update: {
-      githubAccessTokenEncrypted: encryptedToken,
-    },
-  });
+      update: {
+        userId,
+        githubAccessTokenEncrypted: encryptedToken,
+      },
+    }),
+  ]);
 
-  return { username: githubProfile.login };
+  return { username: githubProfile.login, transferred };
 }
 
 export async function getGitHubConnectionStatus(
@@ -153,7 +207,14 @@ export async function getGitHubConnectionStatus(
       connected: true,
       username: profile.login,
     };
-  } catch {
+  } catch (error) {
+    // Previously swallowed silently. Log it so "connected: false" with a
+    // saved token (bad encryption key, revoked token, GitHub timeout) is
+    // visible in the server log.
+    console.error(
+      "[github] status check failed for a saved connection:",
+      error instanceof Error ? error.message : error,
+    );
     return { connected: false };
   }
 }
@@ -162,10 +223,22 @@ async function getAccessToken(userId: string): Promise<string> {
   const account = await getConnection(userId);
 
   if (!account?.githubAccessTokenEncrypted) {
-    throw new Error("Connect GitHub before accessing repositories");
+    throw new GitHubIntegrationError(
+      "Connect GitHub before accessing repositories.",
+      409,
+      "github_not_connected",
+    );
   }
 
-  return decryptGitHubToken(account.githubAccessTokenEncrypted);
+  try {
+    return decryptGitHubToken(account.githubAccessTokenEncrypted);
+  } catch {
+    throw new GitHubIntegrationError(
+      "The saved GitHub connection could not be read. Please reconnect GitHub.",
+      409,
+      "github_token_unreadable",
+    );
+  }
 }
 
 export async function listGitHubRepositories(
@@ -190,7 +263,7 @@ export async function listGitHubRepositories(
   );
 
   if (!response.ok) {
-    throw new Error("Unable to load GitHub repositories");
+    failFromResponse(response, "Unable to load GitHub repositories");
   }
 
   const repositories = (await response.json()) as GitHubRepository[];
@@ -229,7 +302,7 @@ export async function getGitHubRepositoryBranches(
   );
 
   if (!response.ok) {
-    throw new Error("Unable to load repository branches");
+    failFromResponse(response, "Unable to load repository branches");
   }
 
   const branches = (await response.json()) as Array<{
@@ -257,7 +330,11 @@ export async function getGitHubRepositoryContents(
     path.startsWith("/") ||
     path.split("/").includes("..")
   ) {
-    throw new Error("Invalid repository path");
+    throw new GitHubIntegrationError(
+      "Invalid repository path",
+      400,
+      "invalid_path",
+    );
   }
 
   const encodedPath = path
@@ -280,7 +357,7 @@ export async function getGitHubRepositoryContents(
   });
 
   if (!response.ok) {
-    throw new Error("Unable to load repository contents");
+    failFromResponse(response, "Unable to load repository contents");
   }
 
   const payload: unknown = await response.json();
@@ -313,15 +390,27 @@ export async function getGitHubRepositoryContents(
   };
 
   if (file.type !== "file") {
-    throw new Error("Unsupported repository content type");
+    throw new GitHubIntegrationError(
+      "Unsupported repository content type",
+      415,
+      "unsupported_content",
+    );
   }
 
   if (file.size > 200_000) {
-    throw new Error("File is too large to load into the editor");
+    throw new GitHubIntegrationError(
+      "File is too large to load into the editor",
+      413,
+      "file_too_large",
+    );
   }
 
   if (file.encoding !== "base64" || typeof file.content !== "string") {
-    throw new Error("GitHub returned an unsupported file encoding");
+    throw new GitHubIntegrationError(
+      "GitHub returned an unsupported file encoding",
+      502,
+      "github_upstream_error",
+    );
   }
 
   return {

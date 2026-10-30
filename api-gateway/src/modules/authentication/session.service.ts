@@ -42,3 +42,19 @@ export async function deleteSession(token: string): Promise<void> {
 
   await redis.del(`auth:session:${tokenHash}`);
 }
+
+/** Revoke every active session belonging to a user, including other browsers. */
+export async function deleteAllSessionsForUser(userId: string): Promise<void> {
+  for await (const keys of redis.scanIterator({
+    MATCH: "auth:session:*",
+    COUNT: 100,
+  })) {
+    for (const key of Array.isArray(keys) ? keys : [keys]) {
+      const sessionUserId = await redis.get(key);
+
+      if (sessionUserId === userId) {
+        await redis.del(key);
+      }
+    }
+  }
+}

@@ -102,7 +102,7 @@ services:
       GITHUB_CONNECT_CLIENT_SECRET: ${GITHUB_CONNECT_CLIENT_SECRET}
       GITHUB_TOKEN_ENCRYPTION_KEY: ${GITHUB_TOKEN_ENCRYPTION_KEY}
     ports:
-      - "5001:5000"
+      - "5002:5000"
     depends_on:
       ai-service:
         condition: service_healthy

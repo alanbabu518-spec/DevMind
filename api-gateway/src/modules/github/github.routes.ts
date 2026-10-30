@@ -1,5 +1,10 @@
 import { timingSafeEqual } from "node:crypto";
-import { Router, type RequestHandler } from "express";
+import {
+  Router,
+  type NextFunction,
+  type RequestHandler,
+  type Response,
+} from "express";
 import passport from "passport";
 import { requireAuthentication } from "../../middleware/auth.middleware";
 import {
@@ -7,6 +12,7 @@ import {
   createGitHubConnectState,
 } from "./github-connect-state.service";
 import {
+  GitHubIntegrationError,
   connectGitHubAccount,
   disconnectGitHubAccount,
   getGitHubConnectionStatus,
@@ -30,6 +36,22 @@ function stateCookieOptions() {
   };
 }
 
+/**
+ * Optional hint typed in the app ("GitHub username or email"). GitHub shows it
+ * pre-filled on its sign-in page. Only usernames and emails are accepted.
+ */
+function readLoginHint(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+
+  const hint = value.trim();
+  if (!hint || hint.length > 254) return undefined;
+
+  const isUsername = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(hint);
+  const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(hint);
+
+  return isUsername || isEmail ? hint : undefined;
+}
+
 function getFrontendUrl(): string {
   return process.env.FRONTEND_URL || "http://localhost:5174";
 }
@@ -44,12 +66,26 @@ function redirectToFrontend(
   return url.toString();
 }
 
-function safeErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
+/**
+ * Expected integration problems (not connected, token revoked, rate limit...)
+ * become a real 4xx/429/502 with a stable `code`. Anything else still goes to
+ * the global error handler and stays a 500.
+ */
+function sendGitHubError(
+  error: unknown,
+  res: Response,
+  next: NextFunction,
+): void {
+  if (error instanceof GitHubIntegrationError) {
+    res.status(error.statusCode).json({
+      status: "error",
+      code: error.code,
+      message: error.message,
+    });
+    return;
   }
 
-  return "An unexpected GitHub integration error occurred";
+  next(error);
 }
 
 const startConnection: RequestHandler = async (req, res, next) => {
@@ -68,11 +104,19 @@ const startConnection: RequestHandler = async (req, res, next) => {
 
     res.cookie(STATE_COOKIE, state, stateCookieOptions());
 
-    passport.authenticate("github-connect", {
+    const loginHint = readLoginHint(req.query.login);
+
+    // Built as a variable so the extra `login` option passes TypeScript's
+    // excess-property check. It reaches GitHub through the strategy's
+    // `authorizationParams` (see the note in the strategy file).
+    const options = {
       session: false,
       state,
       scope: ["repo", "user:email"],
-    })(req, res, next);
+      ...(loginHint ? { login: loginHint } : {}),
+    };
+
+    passport.authenticate("github-connect", options)(req, res, next);
   } catch (error) {
     next(error);
   }
@@ -92,9 +136,7 @@ const validateConnectState: RequestHandler = async (req, res, next) => {
     !/^[a-f0-9]{64}$/.test(cookieState) ||
     !/^[a-f0-9]{64}$/.test(queryState)
   ) {
-    res.redirect(
-      redirectToFrontend("error", "invalid_oauth_state"),
-    );
+    res.redirect(redirectToFrontend("error", "invalid_oauth_state"));
     return;
   }
 
@@ -105,22 +147,15 @@ const validateConnectState: RequestHandler = async (req, res, next) => {
     cookieBuffer.length !== queryBuffer.length ||
     !timingSafeEqual(cookieBuffer, queryBuffer)
   ) {
-    res.redirect(
-      redirectToFrontend("error", "invalid_oauth_state"),
-    );
+    res.redirect(redirectToFrontend("error", "invalid_oauth_state"));
     return;
   }
 
   try {
-    const valid = await consumeGitHubConnectState(
-      queryState,
-      userId,
-    );
+    const valid = await consumeGitHubConnectState(queryState, userId);
 
     if (!valid) {
-      res.redirect(
-        redirectToFrontend("error", "expired_oauth_state"),
-      );
+      res.redirect(redirectToFrontend("error", "expired_oauth_state"));
       return;
     }
 
@@ -141,35 +176,31 @@ const completeConnection: RequestHandler = async (req, res, next) => {
         }
       | undefined;
 
-    if (
-      !userId ||
-      !profile?.providerAccountId ||
-      !profile.accessToken
-    ) {
-      res.redirect(
-        redirectToFrontend("error", "github_authorization_failed"),
-      );
+    if (!userId || !profile?.providerAccountId || !profile.accessToken) {
+      res.redirect(redirectToFrontend("error", "github_authorization_failed"));
       return;
     }
 
-    await connectGitHubAccount(userId, {
+    const result = await connectGitHubAccount(userId, {
       providerAccountId: profile.providerAccountId,
       username: profile.username ?? null,
       accessToken: profile.accessToken,
     });
 
     res.redirect(
-      redirectToFrontend("success", "github_connected"),
+      redirectToFrontend(
+        "success",
+        result.transferred
+          ? "github_connected_transferred"
+          : "github_connected",
+      ),
     );
   } catch (error) {
-    // Don't leak internal database errors or credentials to the browser.
-    if (
-      error instanceof Error &&
-      error.message.includes("already connected to another DevMind account")
-    ) {
-      res.redirect(
-        redirectToFrontend("error", "github_account_already_linked"),
-      );
+    // Expected problems (e.g. this GitHub account already belongs to another
+    // DevMind user) go back to the app as a stable code. Internal database
+    // errors and credentials are never leaked to the browser.
+    if (error instanceof GitHubIntegrationError) {
+      res.redirect(redirectToFrontend("error", error.code));
       return;
     }
 
@@ -198,10 +229,7 @@ router.get(
   validateConnectState,
   passport.authenticate("github-connect", {
     session: false,
-    failureRedirect: redirectToFrontend(
-      "error",
-      "github_authorization_failed",
-    ),
+    failureRedirect: redirectToFrontend("error", "github_authorization_failed"),
   }),
   completeConnection,
 );
@@ -239,7 +267,7 @@ router.get("/repos", async (req, res, next) => {
 
     res.json({ status: "success", data: repositories });
   } catch (error) {
-    next(error);
+    sendGitHubError(error, res, next);
   }
 });
 
@@ -253,16 +281,13 @@ router.get("/repos/:owner/:repo/branches", async (req, res, next) => {
 
     res.json({ status: "success", data: branches });
   } catch (error) {
-    next(error);
+    sendGitHubError(error, res, next);
   }
 });
 
 router.get("/repos/:owner/:repo/contents", async (req, res, next) => {
   try {
-    const path =
-      typeof req.query.path === "string"
-        ? req.query.path
-        : "";
+    const path = typeof req.query.path === "string" ? req.query.path : "";
 
     const ref =
       typeof req.query.ref === "string"
@@ -279,7 +304,7 @@ router.get("/repos/:owner/:repo/contents", async (req, res, next) => {
 
     res.json({ status: "success", data: contents });
   } catch (error) {
-    next(error);
+    sendGitHubError(error, res, next);
   }
 });
 

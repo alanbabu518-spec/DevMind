@@ -4,7 +4,11 @@ import {
   requestMagicLink as requestMagicLinkService,
   verifyMagicLink as verifyMagicLinkService,
 } from "./auth.service";
-import { createSession, deleteSession } from "./session.service";
+import {
+  createSession,
+  deleteSession,
+  deleteAllSessionsForUser,
+} from "./session.service";
 import { prisma } from "../../lib/prisma";
 
 const SESSION_COOKIE_NAME = "devmind_session";
@@ -119,6 +123,9 @@ export async function getCurrentUser(
         id: true,
         email: true,
         name: true,
+        username: true,
+        avatarId: true,
+        profileCompleted: true,
         emailVerified: true,
         createdAt: true,
         onboardingCompleted: true,
@@ -134,9 +141,12 @@ export async function getCurrentUser(
       return;
     }
 
+    // The database column is `avatarId`; the frontend expects `avatar`.
+    const { avatarId, ...rest } = user;
+
     res.status(200).json({
       status: "success",
-      data: { user },
+      data: { user: { ...rest, avatar: avatarId } },
     });
   } catch {
     res.status(500).json({
