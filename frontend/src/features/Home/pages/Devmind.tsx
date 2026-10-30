@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { FormEvent, ReactNode } from "react";
 import {
   AlertCircle,
-  ArrowDownToLine,
+  ArrowLeft,
   ArrowRight,
+  Bell,
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronsUpDown,
   Code2,
   Copy,
+  Crown,
   File,
   FileCode2,
   FileJson,
@@ -16,7 +19,9 @@ import {
   Folder,
   FolderOpen,
   GitBranch,
+  House,
   Info,
+  Layers,
   LoaderCircle,
   Lock,
   LockKeyhole,
@@ -25,20 +30,27 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Settings,
   ShieldCheck,
   Sparkles,
   Unplug,
+  UserRound,
   X,
 } from "lucide-react";
 import { FaGithub } from "react-icons/fa";
+import { useNavigate } from "react-router-dom";
+import { useUser } from "@/features/auth/context/UserContext";
+import UserAvatar from "@/shared/components/UserAvatar";
+import AccountDrawer from "@/features/Profile/components/AccountDrawer";
+import ProfileSetupDialog from "@/features/Profile/components/ProfileSetupDialog";
 import AiMascotInput from "../components/ui/ai-mascot-input";
-import type {
-  AIModel,
-  ChatSubmitData,
-} from "../components/ui/ai-mascot-input";
+import type { AIModel, ChatSubmitData } from "../components/ui/ai-mascot-input";
+import "../home.css";
+import BrandMark from "../components/BrandMark";
+import HomeDashboard from "../components/HomeDashboard";
 
 const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:5001"
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:5002"
 ).replace(/\/$/, "");
 
 /* ------------------------------------------------------------------ */
@@ -85,6 +97,7 @@ type Notice = { type: "success" | "error" | "info"; text: string };
 type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
 type RepairResult = JsonRecord;
 type SheetKind = "code" | "repair" | "analysis" | "rule" | null;
+type View = "home" | "repos" | "workspace";
 type ConsentAction = "chat" | "repair" | "analyze";
 type DragOpts = {
   els: HTMLElement[];
@@ -172,8 +185,12 @@ function unwrapArray<T>(payload: unknown, keys: string[]): T[] {
   }
   return [];
 }
+/* `cache: "no-store"` matters here: GitHub connection state changes after the
+   OAuth redirect, and a revalidated/cached /status response (304) would keep
+   reporting "not connected" even though the account is linked. */
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
+    cache: "no-store",
     credentials: "include",
     ...init,
     headers: {
@@ -205,6 +222,81 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   return payload as T;
 }
+
+/* Accepts {connected}, {data:{connected}} and the isConnected variants. */
+function parseGithubStatus(raw: unknown): GithubStatus {
+  const payload = asRecord(raw);
+  const nested = asRecord(payload.data);
+  const connected = Boolean(
+    payload.connected ??
+    nested.connected ??
+    payload.isConnected ??
+    nested.isConnected,
+  );
+  return {
+    connected,
+    username: asString(
+      payload.username,
+      asString(
+        payload.login,
+        asString(nested.username, asString(nested.login)),
+      ),
+    ),
+    login: asString(payload.login, asString(nested.login)),
+    avatar_url: asString(
+      payload.avatar_url,
+      asString(
+        payload.avatarUrl,
+        asString(nested.avatar_url, asString(nested.avatarUrl)),
+      ),
+    ),
+    avatarUrl: asString(payload.avatarUrl, asString(nested.avatarUrl)),
+  };
+}
+
+/* The gateway returns fullName (camelCase); the UI uses full_name for API paths. */
+function normalizeRepos(payload: unknown): GithubRepo[] {
+  return unwrapArray<GithubRepo>(payload, ["repos", "items", "data"]).map(
+    (item) => {
+      const fullName =
+        (typeof item.full_name === "string" && item.full_name.trim()) ||
+        (typeof item.fullName === "string" && item.fullName.trim()) ||
+        "";
+      const fallbackName =
+        item.name || fullName.split("/").filter(Boolean).pop() || "Repository";
+      return {
+        ...item,
+        id: item.id ?? fullName ?? fallbackName,
+        name: fallbackName,
+        full_name: fullName || fallbackName,
+        default_branch: item.default_branch ?? item.defaultBranch ?? "main",
+        updated_at: item.updated_at ?? item.updatedAt,
+        html_url: item.html_url ?? item.url,
+      };
+    },
+  );
+}
+
+/* The backend redirects back with a short code in ?message=. */
+function describeGithubMessage(code: string): string {
+  switch (code) {
+    case "github_account_already_linked":
+      return "This GitHub account is already linked to a different DevMind account. Sign in with that account, or disconnect GitHub there first.";
+    case "invalid_oauth_state":
+    case "expired_oauth_state":
+      return "The GitHub sign-in expired. Please try connecting again.";
+    case "github_authorization_failed":
+      return "GitHub authorization failed. Please try again.";
+    case "github_identity_unverified":
+      return "GitHub could not verify this account. Please try again.";
+    default:
+      return code || "GitHub connection failed.";
+  }
+}
+
+const GITHUB_LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 const isDirectory = (entry: GithubEntry) => entry.type === "dir";
 
 /* Sort by depth first so a parent folder is always indexed before its children. */
@@ -638,6 +730,8 @@ function TreeItems({
 /* ------------------------------------------------------------------ */
 /*  Page                                                               */
 /* ------------------------------------------------------------------ */
+const SETUP_SKIPPED_KEY = "devmind.profileSetupSkipped";
+
 export default function DevMind() {
   const [status, setStatus] = useState<GithubStatus>({ connected: false });
   const [repos, setRepos] = useState<GithubRepo[]>([]);
@@ -670,6 +764,59 @@ export default function DevMind() {
   const [sheet, setSheet] = useState<SheetKind>(null);
   const [filesOpen, setFilesOpen] = useState(true);
   const [kb, setKb] = useState(false);
+  const [view, setView] = useState<View>("home");
+  const [globalQuery, setGlobalQuery] = useState("");
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [githubLogin, setGithubLogin] = useState("");
+  const [githubLoginError, setGithubLoginError] = useState("");
+
+  /* ---------- account: profile setup popup + sliding account panel ---------- */
+  const navigate = useNavigate();
+  const { user, status: userStatus, refresh: refreshUser } = useUser();
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [setupSkipped, setSetupSkipped] = useState(() => {
+    try {
+      return sessionStorage.getItem(SETUP_SKIPPED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const handle = user?.username ?? user?.email.split("@")[0] ?? "";
+  const showSetup =
+    userStatus === "authed" &&
+    !!user &&
+    !user.profileCompleted &&
+    !setupSkipped;
+
+  useEffect(() => {
+    // Onboarding just finished (client-side navigation): pick up the latest user.
+    void refreshUser();
+  }, [refreshUser]);
+
+  useEffect(() => {
+    if (userStatus === "anonymous") navigate("/login", { replace: true });
+  }, [userStatus, navigate]);
+
+  const skipSetup = () => {
+    try {
+      sessionStorage.setItem(SETUP_SKIPPED_KEY, "1");
+    } catch {
+      /* private mode: skip for this render only */
+    }
+    setSetupSkipped(true);
+  };
+
+  // Ctrl/⌘ + K focuses the search bar
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, []);
 
   const dR = useRef<HTMLElement>(null),
     dscR = useRef<HTMLDivElement>(null);
@@ -678,9 +825,12 @@ export default function DevMind() {
   const sscR = useRef<HTMLDivElement>(null),
     grR = useRef<HTMLDivElement>(null);
   const threadR = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const effortRef = useRef("medium");
-  const autoOpened = useRef(false);
   const pendingMessage = useRef("");
+  // Set when the status check already fetched the repo list, so the
+  // "connected → load repos" effect doesn't request it a second time.
+  const skipRepoLoad = useRef(false);
   const api = useRef<{
     drawer: (o: boolean, v?: number) => void;
     sheet: (o: boolean, v?: number) => void;
@@ -821,45 +971,46 @@ export default function DevMind() {
   }, [chat, sending]);
 
   /* ---------- data: GitHub status, repos, branches, files ---------- */
-  const loadStatus = useCallback(async () => {
+
+  /* Resolves to true when GitHub is connected.
+     1) Ask /status (never cached).
+     2) If /status says "not connected", double-check with the repos endpoint:
+        if GitHub really returns repositories for this session, the account IS
+        connected and the stale/incorrect flag is overridden. */
+  const loadStatus = useCallback(async (): Promise<boolean> => {
     setLoadingStatus(true);
+    let next: GithubStatus = { connected: false };
+    let statusError = "";
     try {
-      const payload = asRecord(await request<unknown>("/api/github/status"));
-      const nested = asRecord(payload.data);
-      const connected = Boolean(
-        payload.connected ??
-        nested.connected ??
-        payload.isConnected ??
-        nested.isConnected,
-      );
-      setStatus({
-        connected,
-        username: asString(
-          payload.username,
-          asString(
-            payload.login,
-            asString(nested.username, asString(nested.login)),
-          ),
-        ),
-        login: asString(payload.login, asString(nested.login)),
-        avatar_url: asString(
-          payload.avatar_url,
-          asString(
-            payload.avatarUrl,
-            asString(nested.avatar_url, asString(nested.avatarUrl)),
-          ),
-        ),
-        avatarUrl: asString(payload.avatarUrl, asString(nested.avatarUrl)),
-      });
+      next = parseGithubStatus(await request<unknown>("/api/github/status"));
     } catch (error) {
-      setStatus({ connected: false });
+      statusError = error instanceof Error ? error.message : "";
+    }
+
+    if (!next.connected) {
+      try {
+        const list = normalizeRepos(
+          await request<unknown>("/api/github/repos?page=1&sort=updated"),
+        );
+        if (list.length) {
+          next = { ...next, connected: true };
+          skipRepoLoad.current = true;
+          setRepos(list);
+        }
+      } catch {
+        /* a failing repos call confirms GitHub is not connected */
+      }
+    }
+
+    setStatus(next);
+    if (!next.connected && statusError) {
       notify(
-        `GitHub status could not be loaded. Check the gateway route and API URL. ${error instanceof Error ? error.message : ""}`.trim(),
+        `GitHub status could not be loaded. Check the gateway route and API URL. ${statusError}`.trim(),
         "error",
       );
-    } finally {
-      setLoadingStatus(false);
     }
+    setLoadingStatus(false);
+    return next.connected;
   }, [notify]);
 
   const loadRepos = useCallback(async () => {
@@ -868,30 +1019,7 @@ export default function DevMind() {
       const payload = await request<unknown>(
         "/api/github/repos?page=1&sort=updated",
       );
-      const list = unwrapArray<GithubRepo>(payload, [
-        "repos",
-        "items",
-        "data",
-      ]).map((item) => {
-        const fullName =
-          (typeof item.full_name === "string" && item.full_name.trim()) ||
-          (typeof item.fullName === "string" && item.fullName.trim()) ||
-          "";
-        const fallbackName =
-          item.name ||
-          fullName.split("/").filter(Boolean).pop() ||
-          "Repository";
-        return {
-          ...item,
-          id: item.id ?? fullName ?? fallbackName,
-          name: fallbackName,
-          // The gateway returns fullName (camelCase); the UI uses full_name for API paths.
-          full_name: fullName || fallbackName,
-          default_branch: item.default_branch ?? item.defaultBranch ?? "main",
-          updated_at: item.updated_at ?? item.updatedAt,
-          html_url: item.html_url ?? item.url,
-        };
-      });
+      const list = normalizeRepos(payload);
       setRepos(list);
       if (!list.length)
         notify(
@@ -908,32 +1036,78 @@ export default function DevMind() {
     }
   }, [notify]);
 
+  // Connected (on first load, after the OAuth redirect, or after a re-check)
+  // → load the repositories so Home shows them immediately.
   useEffect(() => {
-    if (status.connected) void loadRepos();
-  }, [status.connected, loadRepos]);
-
-  /* first time after connecting with nothing imported yet: show the repository drawer */
-  useEffect(() => {
-    if (status.connected && repos.length && !repo && !autoOpened.current) {
-      autoOpened.current = true;
-      api.current.drawer(true);
+    if (!status.connected) return;
+    if (skipRepoLoad.current) {
+      skipRepoLoad.current = false;
+      return;
     }
-  }, [status.connected, repos, repo]);
+    void loadRepos();
+  }, [status.connected, loadRepos]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const githubResult = params.get("github");
-    if (githubResult === "success")
-      notify("GitHub connected successfully.", "success");
-    if (githubResult === "error")
-      notify(params.get("message") || "GitHub connection failed.", "error");
+    const githubMessage = params.get("message") || "";
     if (githubResult)
       window.history.replaceState({}, "", window.location.pathname); // don't re-toast on refresh
-    void loadStatus();
+
+    void (async () => {
+      const connected = await loadStatus();
+      if (githubResult === "success") {
+        if (connected)
+          notify(
+            githubMessage === "github_connected_transferred"
+              ? "GitHub connected. It was moved from your other DevMind account to this one."
+              : "GitHub connected successfully.",
+            "success",
+          );
+        else
+          notify(
+            "GitHub was authorized, but the server still reports it as not connected. Check that the OAuth callback saves the token for this account.",
+            "error",
+          );
+      } else if (githubResult === "error") {
+        // "already connected" style errors are really a success.
+        if (connected) notify("GitHub is already connected.", "success");
+        else notify(describeGithubMessage(githubMessage), "error");
+      }
+    })();
   }, [loadStatus, notify]);
 
-  const connectGithub = () => {
-    window.location.assign(`${API_BASE_URL}/api/github/connect`);
+  /* Never send an already-connected user back through OAuth. */
+  const connectGithub = async () => {
+    if (status.connected) {
+      notify(
+        `GitHub is already connected${status.username ? ` as ${status.username}` : ""}.`,
+        "success",
+      );
+      if (!repos.length && !loadingRepos) void loadRepos();
+      return;
+    }
+    const alreadyConnected = await loadStatus();
+    if (alreadyConnected) {
+      notify("GitHub is already connected.", "success");
+      return;
+    }
+    // Not connected for this DevMind account: ask which GitHub account to use.
+    setGithubLogin("");
+    setGithubLoginError("");
+    setConnectOpen(true);
+  };
+
+  const submitGithubLogin = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const value = githubLogin.trim();
+    if (value && !GITHUB_LOGIN_RE.test(value) && !EMAIL_RE.test(value)) {
+      setGithubLoginError("Enter a valid GitHub username or email.");
+      return;
+    }
+    setConnectOpen(false);
+    const query = value ? `?login=${encodeURIComponent(value)}` : "";
+    window.location.assign(`${API_BASE_URL}/api/github/connect${query}`);
   };
 
   const disconnectGithub = async () => {
@@ -952,7 +1126,6 @@ export default function DevMind() {
       setConsentKey(null);
       setConsentOpen(false);
       setPendingAction(null);
-      autoOpened.current = false;
       closeSheet();
       api.current.drawer(false);
       notify("GitHub disconnected.", "success");
@@ -1037,6 +1210,11 @@ export default function DevMind() {
     setBranch(selectedRepo.default_branch || "main");
     closeSheet();
     api.current.drawer(false);
+
+    closeSheet();
+    api.current.drawer(false);
+    setView("workspace");
+    setLoadingFiles(true);
     setLoadingFiles(true);
     try {
       const encoded = selectedRepo.full_name
@@ -1179,7 +1357,7 @@ export default function DevMind() {
     const snippets: string[] = [];
     let totalChars = 0;
     const maxFiles = 15,
-    maxChars = 15000;
+      maxChars = 15000;
 
     while (
       queue.length &&
@@ -1267,7 +1445,7 @@ export default function DevMind() {
     if (!message || sending) return;
     if (!repo) {
       notify("Import a repository first.", "info");
-      api.current.drawer(true);
+      setView("repos");
       return;
     }
     if (!consentApproved && needConsent("chat")) {
@@ -1638,13 +1816,61 @@ export default function DevMind() {
     );
   };
 
+  /* ---------- Home / Repositories / Workspace navigation ---------- */
+  const isFree = !user?.selectedPlan || user.selectedPlan === "Free";
+  const planLabel = `${user?.selectedPlan ?? "Free"} Plan`;
+  const displayName = user?.name?.trim() || handle || "there";
+  const modKey =
+    typeof navigator !== "undefined" &&
+    /Mac|iPhone|iPad/i.test(navigator.platform)
+      ? "⌘"
+      : "Ctrl";
+  const searchPlaceholder =
+    typeof window !== "undefined" &&
+    window.matchMedia("(max-width: 699px)").matches
+      ? "Search or ask anything…"
+      : "Search repositories, files, or ask anything…";
+
+  const goView = (v: View) => {
+    setView(v);
+    api.current.drawer(false);
+  };
+  const startChat = () => {
+    setChat([]);
+    setPrompt("");
+    if (repo) setView("workspace");
+    else {
+      setView("repos");
+      notify("Import a repository to start a chat.", "info");
+    }
+  };
+  const startAnalyze = () => {
+    if (repo) {
+      setView("workspace");
+      notify("Pick a file, then tap Analyze.", "info");
+    } else {
+      setView("repos");
+      notify("Import a repository to analyze its code.", "info");
+    }
+  };
+  const submitGlobalSearch = () => {
+    const q = globalQuery.trim();
+    if (!q) return;
+    if (repo) {
+      setView("workspace");
+      setGlobalQuery("");
+      void sendPrompt(q);
+    } else {
+      setRepoSearch(q);
+      setView("repos");
+    }
+  };
+
   /* ---------- shared fragments ---------- */
   const voiceOk =
     typeof window !== "undefined" &&
     ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
   const chatEmpty = chat.length === 0 && !sending;
-  const avatar = status.avatar_url || status.avatarUrl;
-  const initial = (status.username || "D").slice(0, 1).toUpperCase();
 
   const search = (
     value: string,
@@ -1683,8 +1909,12 @@ export default function DevMind() {
     <div className="dm-repos">
       {visibleRepos.map((item) => {
         const on = repo?.full_name === item.full_name;
-        const act = () =>
-          on ? api.current.drawer(false) : void chooseRepo(item);
+        const act = () => {
+          if (on) {
+            setView("workspace");
+            api.current.drawer(false);
+          } else void chooseRepo(item);
+        };
         return (
           <div key={String(item.id)} className={`dm-repo ${on ? "on" : ""}`}>
             <button className="dm-repo-main dm-press" onClick={act}>
@@ -1742,7 +1972,10 @@ export default function DevMind() {
           <Unplug size={17} /> Disconnect
         </button>
       ) : (
-        <button className="dm-btn g dm-press" onClick={connectGithub}>
+        <button
+          className="dm-btn g dm-press"
+          onClick={() => void connectGithub()}
+        >
           <FaGithub size={18} /> Connect GitHub
         </button>
       )}
@@ -1873,327 +2106,465 @@ export default function DevMind() {
     <div className={`dm-app ${kb ? "kb" : ""}`}>
       <style>{styles}</style>
 
-      {/* repository drawer (persistent sidebar on desktop) */}
-      <aside ref={dR} className="dm-drawer dm-glass" aria-label="Repositories">
+      {/* sidebar (persistent on desktop, swipe-out drawer on phones) */}
+      <aside ref={dR} className="dm-drawer" aria-label="Sidebar">
         <div className="dm-brand">
-          <Orb size={34} />
-          DevMind
+          <BrandMark />
+          <span>DevMind</span>
         </div>
-        {search(
-          repoSearch,
-          setRepoSearch,
-          "Find repository",
-          !status.connected,
-        )}
-        <div className="dm-side-scroll">{repoRows}</div>
-        {connection}
+
+        <nav className="dm-nav" aria-label="Main">
+          <button
+            className={`dm-nav-i dm-press ${view === "home" ? "on" : ""}`}
+            aria-current={view === "home" ? "page" : undefined}
+            onClick={() => goView("home")}
+          >
+            <House size={22} strokeWidth={1.7} /> Home
+          </button>
+          <button
+            className={`dm-nav-i dm-press ${view !== "home" ? "on" : ""}`}
+            aria-current={view !== "home" ? "page" : undefined}
+            onClick={() => goView("repos")}
+          >
+            <Layers size={22} strokeWidth={1.7} /> Repositories
+          </button>
+          <button
+            className="dm-nav-i dm-press"
+            onClick={() => navigate("/profile")}
+          >
+            <UserRound size={22} strokeWidth={1.7} /> Profile
+          </button>
+          <button
+            className="dm-nav-i dm-press"
+            onClick={() => navigate("/profile#connections")}
+          >
+            <Settings size={22} strokeWidth={1.7} /> Settings
+          </button>
+        </nav>
+
+        <div className="dm-side-foot">
+          {isFree && (
+            <div className="dm-upsell">
+              <span className="dm-upsell-ic">
+                <Crown size={22} />
+              </span>
+              <strong>Upgrade to Pro</strong>
+              <p>Get more AI power, more repositories, and priority support.</p>
+              <button
+                className="dm-btn g dm-press"
+                onClick={() => navigate("/profile#plan")}
+              >
+                Upgrade Now <ArrowRight size={16} />
+              </button>
+            </div>
+          )}
+          {user && (
+            <button
+              className="dm-user dm-only-mobile dm-press"
+              onClick={() => {
+                api.current.drawer(false);
+                setAccountOpen(true);
+              }}
+              aria-haspopup="dialog"
+              aria-label="Open account menu"
+            >
+              <UserAvatar
+                avatar={user.avatar}
+                fallbackSeed={handle}
+                size={40}
+              />
+              <span className="dm-user-tx">
+                <strong className="dm-truncate">@{handle}</strong>
+                <small className="dm-truncate">{user.email}</small>
+              </span>
+              <ChevronsUpDown size={16} className="dm-dim-ic" />
+            </button>
+          )}
+        </div>
       </aside>
       <div ref={dscR} className="dm-dscrim" />
 
       <div className="dm-shell">
-        <header className="dm-top dm-glass">
+        <header className="dm-top">
           <button
             className="dm-ib dm-press dm-menu"
-            aria-label="Repositories"
+            aria-label="Open menu"
             onClick={() => api.current.drawer(true)}
           >
             <Menu size={20} />
           </button>
-          {status.connected ? (
-            <div className="dm-title two">
-              <strong className="dm-truncate">
-                {repo ? repo.full_name : "Choose a repository"}
-              </strong>
-              <span className="dm-truncate">
-                {repo
-                  ? `${branch} · ${repo.private ? "Private" : "Public"}`
-                  : "Open the menu to import one"}
-              </span>
-            </div>
-          ) : (
-            <div className="dm-title">DevMind</div>
-          )}
-          <button
-            className="dm-ib dm-press"
-            aria-label={
-              status.connected ? "Refresh from GitHub" : "Refresh GitHub status"
-            }
-            onClick={() =>
-              status.connected ? refreshAll() : void loadStatus()
-            }
-            disabled={loadingStatus || loadingRepos}
+
+          <form
+            className="dm-gsearch"
+            role="search"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitGlobalSearch();
+            }}
           >
-            <RefreshCw
-              size={18}
-              className={loadingStatus || loadingRepos ? "dm-spin" : ""}
+            <Search size={19} />
+            <input
+              ref={searchRef}
+              value={globalQuery}
+              onChange={(e) => setGlobalQuery(e.target.value)}
+              placeholder={searchPlaceholder}
+              aria-label="Search repositories, files, or ask anything"
+              enterKeyHint="search"
+              autoCapitalize="none"
+              autoCorrect="off"
             />
+            <span className="dm-kbd" aria-hidden="true">
+              <kbd>{modKey}</kbd>
+              <kbd>K</kbd>
+            </span>
+          </form>
+
+          <button
+            className="dm-bell dm-press"
+            aria-label="Notifications"
+            onClick={() => notify("You are all caught up.", "info")}
+          >
+            <Bell size={22} strokeWidth={1.7} />
           </button>
-          <div className="dm-avatar" aria-hidden="true">
-            {avatar ? <img src={avatar} alt="" /> : initial}
-          </div>
+
+          {user && (
+            <button
+              className="dm-chip-user dm-press"
+              aria-label="Open account menu"
+              aria-haspopup="dialog"
+              onClick={() => setAccountOpen(true)}
+            >
+              <span className="dm-av-round">
+                <UserAvatar
+                  avatar={user.avatar}
+                  fallbackSeed={handle}
+                  size={42}
+                />
+              </span>
+              <span className="dm-chip-tx">
+                <strong className="dm-truncate">{displayName}</strong>
+                <small>{planLabel}</small>
+              </span>
+              <ChevronDown size={16} className="dm-chip-chev" />
+            </button>
+          )}
         </header>
 
         <main className="dm-content">
-          {!status.connected ? (
-            /* ---------- before connecting (unchanged) ---------- */
+          {view === "home" ? (
+            <HomeDashboard
+              displayName={displayName}
+              planLabel={planLabel}
+              isFree={isFree}
+              connected={status.connected}
+              loading={loadingStatus || loadingRepos}
+              repos={repos}
+              onNewChat={startChat}
+              onConnect={() => void connectGithub()}
+              onImport={() =>
+                notify(
+                  "ZIP import is not connected to a backend endpoint yet. Use GitHub for live repository browsing.",
+                  "info",
+                )
+              }
+              onAnalyze={startAnalyze}
+              onExplore={() => setView("repos")}
+              onOpenRepo={(r) => void chooseRepo(r)}
+              onAddRepo={() => setView("repos")}
+              onUpgrade={() => navigate("/profile#plan")}
+              onDocs={() => notify("Documentation is coming soon.", "info")}
+              onSettings={() => navigate("/profile")}
+            />
+          ) : view === "repos" ? (
             <div className="dm-scroll">
-              <section className="dm-home">
-                <Orb size={56} />
-                <h1>Understand your code.</h1>
-                <p>
-                  Connect a repository to explore it, ask questions with
-                  context, and review AI-proposed repairs.
-                </p>
-                {loadingStatus ? (
-                  <div className="dm-state">
-                    <Spin /> Checking GitHub…
+              <section className="dm-page">
+                <div className="dm-page-head">
+                  <div>
+                    <h1>Repositories</h1>
+                    <p>
+                      {status.connected
+                        ? `${repos.length} repositories from GitHub`
+                        : "Connect GitHub to import your code."}
+                    </p>
                   </div>
-                ) : (
-                  <>
-                    <div className="dm-cta">
-                      <button
-                        className="dm-btn g dm-press"
-                        onClick={connectGithub}
-                      >
-                        <FaGithub size={19} /> Connect GitHub{" "}
-                        <ArrowRight size={17} />
-                      </button>
-                      <button
-                        className="dm-btn o dm-press"
-                        onClick={() =>
-                          notify(
-                            "ZIP import is not connected to a backend endpoint yet. Use GitHub for live repository browsing.",
-                            "info",
-                          )
-                        }
-                      >
-                        <ArrowDownToLine size={17} /> Import a project
-                      </button>
-                    </div>
-                    <div className="dm-trust">
-                      <ShieldCheck size={15} /> You choose what to inspect.
-                      Repairs stay proposals until you review them.
-                    </div>
-                  </>
+                  <button
+                    className="dm-ib dm-press"
+                    aria-label="Refresh from GitHub"
+                    onClick={() =>
+                      status.connected ? refreshAll() : void loadStatus()
+                    }
+                    disabled={loadingStatus || loadingRepos}
+                  >
+                    <RefreshCw
+                      size={18}
+                      className={loadingStatus || loadingRepos ? "dm-spin" : ""}
+                    />
+                  </button>
+                </div>
+                {search(
+                  repoSearch,
+                  setRepoSearch,
+                  "Find repository",
+                  !status.connected,
                 )}
+                <div className="dm-page-grid">
+                  <div>{repoRows}</div>
+                  {connection}
+                </div>
               </section>
             </div>
           ) : (
             /* ---------- after connecting: Files | DevMind AI, as sketched ---------- */
-            <div className="dm-stack">
-              <section
-                className={`dm-card dm-files ${filesOpen ? "open" : ""}`}
-              >
-                <div className="dm-ph dm-ph-files">
-                  <button
-                    className="dm-collapse dm-press"
-                    onClick={() => setFilesOpen((o) => !o)}
-                    aria-expanded={filesOpen}
-                  >
-                    <h2>Files</h2>
-                    <ChevronDown
-                      size={18}
-                      className={`dm-chev2 ${filesOpen ? "open" : ""}`}
-                    />
-                  </button>
-                  <label className={`dm-branch ${repo ? "" : "off"}`}>
-                    <GitBranch size={14} />
-                    <select
-                      value={branch}
-                      disabled={!repo}
-                      aria-label="Select branch"
-                      onChange={(e) => {
-                        if (!repo) return;
-                        setConsentKey(null);
-                        setAnalysisResult(null);
-                        setRepairResult(null);
-                        setBranch(e.target.value);
-                        void loadContents(repo, e.target.value);
-                        setSelectedFile(null);
-                        setSourceCode("");
-                      }}
+            <div className="dm-ws">
+              <div className="dm-ws-bar">
+                <button
+                  className="dm-ib sm dm-press"
+                  aria-label="Back to repositories"
+                  onClick={() => setView("repos")}
+                >
+                  <ArrowLeft size={18} />
+                </button>
+                <div className="dm-ws-title">
+                  <strong className="dm-truncate">
+                    {repo ? repo.full_name : "Choose a repository"}
+                  </strong>
+                  <span className="dm-truncate">
+                    {repo
+                      ? `${branch} · ${repo.private ? "Private" : "Public"}`
+                      : "Import one from Repositories"}
+                  </span>
+                </div>
+                <button
+                  className="dm-ib sm dm-press"
+                  aria-label="Refresh from GitHub"
+                  onClick={refreshAll}
+                  disabled={loadingStatus || loadingRepos}
+                >
+                  <RefreshCw
+                    size={17}
+                    className={loadingStatus || loadingRepos ? "dm-spin" : ""}
+                  />
+                </button>
+              </div>
+              <div className="dm-stack">
+                <section
+                  className={`dm-card dm-files ${filesOpen ? "open" : ""}`}
+                >
+                  <div className="dm-ph dm-ph-files">
+                    <button
+                      className="dm-collapse dm-press"
+                      onClick={() => setFilesOpen((o) => !o)}
+                      aria-expanded={filesOpen}
                     >
-                      {branches.length ? (
-                        branches.map((b) => (
-                          <option key={b.name} value={b.name}>
-                            {b.name}
-                          </option>
-                        ))
-                      ) : (
-                        <option value={branch}>{branch}</option>
-                      )}
-                    </select>
-                    <ChevronDown size={13} />
-                  </label>
-                </div>
-                <div className="dm-files-body">
-                  <div className="dm-pad">
-                    {search(fileSearch, setFileSearch, "Search files", !repo)}
-                  </div>
-                  <div className="dm-pscroll">
-                    {!repo ? (
-                      <div className="dm-empty">
-                        <span className="dm-empty-ic">
-                          <Folder size={24} />
-                        </span>
-                        <strong>No repository imported</strong>
-                        <span>Import one to browse its folders and files.</span>
-                        <button
-                          className="dm-btn g dm-press dm-inline-btn"
-                          onClick={() => api.current.drawer(true)}
-                        >
-                          <Plus size={17} /> Import a repository
-                        </button>
-                      </div>
-                    ) : loadingFiles ? (
-                      <div className="dm-state">
-                        <Spin size={18} /> Loading repository tree…
-                      </div>
-                    ) : tree.length ? (
-                      <TreeItems
-                        nodes={tree}
-                        depth={0}
-                        selected={selectedFile?.path || ""}
-                        expanded={expanded}
-                        onToggle={toggleDirectory}
-                        onSelect={(e) => void selectFile(e)}
+                      <h2>Files</h2>
+                      <ChevronDown
+                        size={18}
+                        className={`dm-chev2 ${filesOpen ? "open" : ""}`}
                       />
-                    ) : (
-                      <div className="dm-empty">
-                        <Folder size={26} />
-                        <strong>No files to display</strong>
-                        <span>Check the branch or clear your search.</span>
-                      </div>
-                    )}
+                    </button>
+                    <label className={`dm-branch ${repo ? "" : "off"}`}>
+                      <GitBranch size={14} />
+                      <select
+                        value={branch}
+                        disabled={!repo}
+                        aria-label="Select branch"
+                        onChange={(e) => {
+                          if (!repo) return;
+                          setConsentKey(null);
+                          setAnalysisResult(null);
+                          setRepairResult(null);
+                          setBranch(e.target.value);
+                          void loadContents(repo, e.target.value);
+                          setSelectedFile(null);
+                          setSourceCode("");
+                        }}
+                      >
+                        {branches.length ? (
+                          branches.map((b) => (
+                            <option key={b.name} value={b.name}>
+                              {b.name}
+                            </option>
+                          ))
+                        ) : (
+                          <option value={branch}>{branch}</option>
+                        )}
+                      </select>
+                      <ChevronDown size={13} />
+                    </label>
                   </div>
-                </div>
-              </section>
-
-              <section className="dm-card dm-aicard">
-                <div className="dm-ph dm-ph-ai">
-                  <div className="dm-ai-title">
-                    <div>
-                      <h2>DevMind AI</h2>
-                      <p>Codebase assistant</p>
+                  <div className="dm-files-body">
+                    <div className="dm-pad">
+                      {search(fileSearch, setFileSearch, "Search files", !repo)}
+                    </div>
+                    <div className="dm-pscroll">
+                      {!repo ? (
+                        <div className="dm-empty">
+                          <span className="dm-empty-ic">
+                            <Folder size={24} />
+                          </span>
+                          <strong>No repository imported</strong>
+                          <span>
+                            Import one to browse its folders and files.
+                          </span>
+                          <button
+                            className="dm-btn g dm-press dm-inline-btn"
+                            onClick={() => api.current.drawer(true)}
+                          >
+                            <Plus size={17} /> Import a repository
+                          </button>
+                        </div>
+                      ) : loadingFiles ? (
+                        <div className="dm-state">
+                          <Spin size={18} /> Loading repository tree…
+                        </div>
+                      ) : tree.length ? (
+                        <TreeItems
+                          nodes={tree}
+                          depth={0}
+                          selected={selectedFile?.path || ""}
+                          expanded={expanded}
+                          onToggle={toggleDirectory}
+                          onSelect={(e) => void selectFile(e)}
+                        />
+                      ) : (
+                        <div className="dm-empty">
+                          <Folder size={26} />
+                          <strong>No files to display</strong>
+                          <span>Check the branch or clear your search.</span>
+                        </div>
+                      )}
                     </div>
                   </div>
-                  {chat.length > 0 && (
-                    <button
-                      className="dm-ib sm dm-press"
-                      aria-label="New chat"
-                      onClick={() => setChat([])}
-                    >
-                      <Plus size={18} />
-                    </button>
-                  )}
-                </div>
-                <div
-                  className={`dm-thread ${chatEmpty ? "empty" : ""}`}
-                  ref={threadR}
-                  aria-live="polite"
-                >
-                  <div className="dm-thread-in">
-                    {chat.map((m) =>
-                      m.role === "user" ? (
-                        <div key={m.id} className="dm-msg user">
-                          <div className="dm-bubble">{m.text}</div>
-                        </div>
-                      ) : (
-                        <div key={m.id} className="dm-msg ai">
+                </section>
+
+                <section className="dm-card dm-aicard">
+                  <div className="dm-ph dm-ph-ai">
+                    <div className="dm-ai-title">
+                      <div>
+                        <h2>DevMind AI</h2>
+                        <p>Codebase assistant</p>
+                      </div>
+                    </div>
+                    {chat.length > 0 && (
+                      <button
+                        className="dm-ib sm dm-press"
+                        aria-label="New chat"
+                        onClick={() => setChat([])}
+                      >
+                        <Plus size={18} />
+                      </button>
+                    )}
+                  </div>
+                  <div
+                    className={`dm-thread ${chatEmpty ? "empty" : ""}`}
+                    ref={threadR}
+                    aria-live="polite"
+                  >
+                    <div className="dm-thread-in">
+                      {chat.map((m) =>
+                        m.role === "user" ? (
+                          <div key={m.id} className="dm-msg user">
+                            <div className="dm-bubble">{m.text}</div>
+                          </div>
+                        ) : (
+                          <div key={m.id} className="dm-msg ai">
+                            <Orb size={28} />
+                            <div className="dm-ai-text">
+                              <Rich text={m.text} />
+                            </div>
+                          </div>
+                        ),
+                      )}
+                      {sending && (
+                        <div className="dm-msg ai">
                           <Orb size={28} />
-                          <div className="dm-ai-text">
-                            <Rich text={m.text} />
+                          <div className="dm-ai-text dm-thinking">
+                            <Spin /> Thinking…
                           </div>
                         </div>
-                      ),
-                    )}
-                    {sending && (
-                      <div className="dm-msg ai">
-                        <Orb size={28} />
-                        <div className="dm-ai-text dm-thinking">
-                          <Spin /> Thinking…
-                        </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
-                </div>
-                <div className={`dm-mascot-wrap ${chatEmpty ? "center" : ""}`}>
-                  <div className="dm-mascot-in">
-                    {selectedFile && (
-                      <div className="dm-ctx-row">
-                        <span className="dm-ctx">
-                          <FileCode2 size={13} />
-                          <span className="dm-truncate">
-                            {selectedFile.path}
+                  <div
+                    className={`dm-mascot-wrap ${chatEmpty ? "center" : ""}`}
+                  >
+                    <div className="dm-mascot-in">
+                      {selectedFile && (
+                        <div className="dm-ctx-row">
+                          <span className="dm-ctx">
+                            <FileCode2 size={13} />
+                            <span className="dm-truncate">
+                              {selectedFile.path}
+                            </span>
                           </span>
-                        </span>
+                        </div>
+                      )}
+                      <div className="dark dm-mascot">
+                        <AiMascotInput
+                          value={prompt}
+                          onChange={setPrompt}
+                          isProcessing={sending}
+                          showWelcome={chatEmpty}
+                          title={
+                            repo
+                              ? `Ask about ${repo.name}`
+                              : "Import a repository to begin"
+                          }
+                          subtitle={
+                            repo
+                              ? "DevMind reads the code you choose and answers with context"
+                              : "Open the menu and tap Import on a repository"
+                          }
+                          placeholder={
+                            repo
+                              ? "Ask about your code…"
+                              : "Import a repository first…"
+                          }
+                          models={DEVMIND_MODELS}
+                          defaultModelId="devmind"
+                          enableAttachments={false}
+                          enableWebSearch={false}
+                          enableVoice={voiceOk}
+                          onSubmit={async (d: ChatSubmitData) => {
+                            effortRef.current = d.effort;
+                            await sendPrompt(d.prompt);
+                          }}
+                        />
                       </div>
-                    )}
-                    <div className="dark dm-mascot">
-                      <AiMascotInput
-                        value={prompt}
-                        onChange={setPrompt}
-                        isProcessing={sending}
-                        showWelcome={chatEmpty}
-                        title={
-                          repo
-                            ? `Ask about ${repo.name}`
-                            : "Import a repository to begin"
-                        }
-                        subtitle={
-                          repo
-                            ? "DevMind reads the code you choose and answers with context"
-                            : "Open the menu and tap Import on a repository"
-                        }
-                        placeholder={
-                          repo
-                            ? "Ask about your code…"
-                            : "Import a repository first…"
-                        }
-                        models={DEVMIND_MODELS}
-                        defaultModelId="devmind"
-                        enableAttachments={false}
-                        enableWebSearch={false}
-                        enableVoice={voiceOk}
-                        onSubmit={async (d: ChatSubmitData) => {
-                          effortRef.current = d.effort;
-                          await sendPrompt(d.prompt);
-                        }}
-                      />
-                    </div>
-                    {chatEmpty && repo && (
-                      <div className="dm-chips">
-                        {[
-                          [
-                            "Explain the architecture",
-                            "Explain the architecture of this repository.",
-                          ],
-                          [
-                            "Review security risks",
-                            "Review this file for security risks.",
-                          ],
-                          [
-                            "Suggest tests",
-                            "What tests should I add for this code?",
-                          ],
-                        ].map(([label, q]) => (
-                          <button
-                            key={label}
-                            className="dm-chip dm-press"
-                            onClick={() => void sendPrompt(q)}
-                          >
-                            {label}
-                          </button>
-                        ))}
+                      {chatEmpty && repo && (
+                        <div className="dm-chips">
+                          {[
+                            [
+                              "Explain the architecture",
+                              "Explain the architecture of this repository.",
+                            ],
+                            [
+                              "Review security risks",
+                              "Review this file for security risks.",
+                            ],
+                            [
+                              "Suggest tests",
+                              "What tests should I add for this code?",
+                            ],
+                          ].map(([label, q]) => (
+                            <button
+                              key={label}
+                              className="dm-chip dm-press"
+                              onClick={() => void sendPrompt(q)}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="dm-disc">
+                        <LockKeyhole size={11} /> AI can make mistakes. Verify
+                        changes.
                       </div>
-                    )}
-                    <div className="dm-disc">
-                      <LockKeyhole size={11} /> AI can make mistakes. Verify
-                      changes.
                     </div>
                   </div>
-                </div>
-              </section>
+                </section>
+              </div>
             </div>
           )}
         </main>
@@ -2451,6 +2822,92 @@ export default function DevMind() {
         </div>
       )}
 
+      {connectOpen && (
+        <div
+          className="dm-consent"
+          role="presentation"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setConnectOpen(false);
+          }}
+        >
+          <form
+            className="dm-dialog dm-glass"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="dm-gh-title"
+            onSubmit={submitGithubLogin}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setConnectOpen(false);
+            }}
+            noValidate
+          >
+            <span className="dm-dialog-ic">
+              <FaGithub size={22} />
+            </span>
+            <h2 id="dm-gh-title">Connect your GitHub account</h2>
+            <p>
+              Enter the GitHub username or email you use. GitHub opens with it
+              pre-filled and you approve access there. If that GitHub account is
+              linked to another DevMind account, the link moves to this one.
+            </p>
+            <label className="dm-field">
+              <span>GitHub username or email</span>
+              <input
+                value={githubLogin}
+                onChange={(e) => {
+                  setGithubLogin(e.target.value);
+                  if (githubLoginError) setGithubLoginError("");
+                }}
+                placeholder="alan123 or you@example.com"
+                inputMode="email"
+                autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                enterKeyHint="go"
+                autoFocus
+                aria-invalid={Boolean(githubLoginError)}
+              />
+            </label>
+            {githubLoginError && (
+              <small className="dm-field-err" role="alert">
+                {githubLoginError}
+              </small>
+            )}
+            <div className="dm-two">
+              <button
+                type="button"
+                className="dm-btn o dm-press"
+                onClick={() => setConnectOpen(false)}
+              >
+                Cancel
+              </button>
+              <button type="submit" className="dm-btn g dm-press">
+                <FaGithub size={17} /> Continue
+              </button>
+            </div>
+            <small>
+              Optional. Leave it empty to pick the account on GitHub instead.
+            </small>
+          </form>
+        </div>
+      )}
+
+      <AccountDrawer
+        open={accountOpen}
+        onClose={() => setAccountOpen(false)}
+        github={{ connected: status.connected, username: status.username }}
+      />
+      {user && (
+        /* mounted once the user is known so the username default comes from their email */
+        <ProfileSetupDialog
+          key={user.id}
+          open={showSetup}
+          onDone={() => undefined}
+          onSkip={skipSetup}
+        />
+      )}
+
       {notice && (
         <button
           className={`dm-toast dm-glass ${notice.type}`}
@@ -2481,7 +2938,7 @@ html{-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%;overs
 body{margin:0;background:#000}
 .dm-app{--g:#76B900;--gd:rgba(118,185,0,.14);--t:#f5f5f7;--m:#8e8e93;--l:rgba(255,255,255,.1);--s:rgba(255,255,255,.06);--s2:rgba(255,255,255,.1);--ease:cubic-bezier(.2,.9,.2,1);
 display:flex;width:100%;height:var(--dm-vh,100dvh);background:#000;color:var(--t);overflow:hidden;
---mono:"JetBrains Mono",var(--mono);
+--mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
 font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;font-optical-sizing:auto}
 :where(.dm-app) *{box-sizing:border-box;margin:0}
 :where(.dm-app) :where(button,[role=button]){font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
@@ -2654,6 +3111,12 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",sy
 .dm-dialog h2{font-size:22px;line-height:1.2;letter-spacing:-.035em;font-weight:700}.dm-dialog p{font-size:14px;line-height:1.6;color:#aeaeb2}
 .dm-dialog-repo{display:flex;align-items:center;gap:8px;padding:12px;border-radius:14px;background:var(--s);border:1px solid var(--l);font-size:14px;font-weight:600}.dm-dialog-branch{display:flex;align-items:center;gap:4px;margin-left:auto;flex:none;font-size:12px;color:var(--m)}
 .dm-dialog small{font-size:12px;color:var(--m);line-height:1.5}
+.dm-field{display:flex;flex-direction:column;gap:8px;font-size:13px;font-weight:600;color:var(--m)}
+.dm-field input{min-height:50px;padding:0 16px;border-radius:14px;background:rgba(0,0,0,.35);border:1px solid var(--l);color:var(--t);outline:0;font-weight:500;transition:border-color .15s,box-shadow .15s}
+.dm-field input::placeholder{color:#6b7068}
+.dm-field input:focus{border-color:rgba(118,185,0,.6);box-shadow:0 0 0 4px rgba(118,185,0,.14)}
+.dm-field input[aria-invalid=true]{border-color:rgba(255,107,97,.6)}
+.dm-field-err{color:#ff8a80;font-size:13px;margin-top:-4px}
 /* toast */
 .dm-toast{position:fixed;z-index:60;left:50%;translate:-50% 0;top:calc(env(safe-area-inset-top,0px) + 66px);width:max-content;max-width:min(92vw,460px);display:flex;align-items:flex-start;gap:10px;padding:12px 14px;border-radius:18px;border:1px solid var(--l);box-shadow:0 12px 40px rgba(0,0,0,.5);font-size:14px;animation:dmToast .4s var(--ease) both}
 .dm-toast>span{flex:1;min-width:0;overflow-wrap:anywhere}.dm-toast>svg:first-child{flex:none;margin-top:1px}
