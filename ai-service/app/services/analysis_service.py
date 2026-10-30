@@ -63,8 +63,8 @@ def analyze_code(language: str, source_code: str, filename: str) -> dict:
     inferred = _language_from_filename(filename)
     aliases = {
         "py": "python", "python": "python",
-        "js": "javascript", "javascript": "javascript", "jsx": "javascript", "mjs": "javascript", "cjs": "javascript",
-        "ts": "typescript", "typescript": "typescript", "tsx": "typescript", "mts": "typescript", "cts": "typescript",
+        "js": "javascript", "javascript": "javascript", "jsx": "javascript", "mjs":"javascript", "cjs": "javascript",
+        "ts": "typescript", "typescript": "typescript", "tsx": "typescript", "mts":"typescript", "cts": "typescript",
         "golang": "go", "go": "go",
         "rb": "ruby", "ruby": "ruby",
         "c": "c", "cpp": "cpp", "c++": "cpp", "cc": "cpp", "cxx": "cpp",
@@ -112,13 +112,17 @@ def analyze_code(language: str, source_code: str, filename: str) -> dict:
         analysis_status = str(native_result.get("status", "partial"))
         analysis_level = "tool-based-static-analysis" if analyzers else "unavailable"
         security_findings = [f for f in findings if str(f.get("severity", "")).lower() == "error"]
-        quality_findings = [f for f in findings if f not in security_findings and f not in secret_findings]
+        quality_findings = [
+            finding
+            for finding in findings
+            if finding not in security_findings and finding not in secret_findings
+        ]
         if not analyzers:
             limitations.append("No language-specific analyzer completed. Do not interpret this result as a clean analysis.")
     else:
         raise ValueError(
             "Unsupported language. Supported: Python, JavaScript, TypeScript, Go, Ruby, C, and C++. "
-            "Use a matching filename extension such as .py, .js, .ts, .go, .rb, .c, .h, .cpp, .cc, or .hpp."
+            "Use a matching filename extension such as .py, .js, .ts, .go, .rb, .c,.h, .cpp, .cc, or .hpp."
         )
 
     severity_counts = {"error": 0, "warning": 0, "info": 0}
