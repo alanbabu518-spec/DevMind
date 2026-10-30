@@ -13,7 +13,12 @@ import LoginPage from "../features/auth/pages/AuthenticationPage";
 import OnboardingPage from "../features/onboarding/pages/OnboardingPage";
 import DevMind from "../features/Home/pages/Devmind";
 import ProfilePage from "../features/Profile/pages/ProfilePage";
+import DocsPage from "@/features/docs/pages/DocsPage";
+import PrivacyPolicyPage from "@/features/legal/pages/PrivacyPolicyPage";
+import TermsPage from "@/features/legal/pages/TermsPage";
+import AboutPage from "../features/about/pages/AboutPage";
 
+import ErrorPage from "../shared/components/ui/error-page";
 import { DevMindProvider } from "@/features/Home/devmind/store";
 import {
   getCurrentUser,
@@ -40,6 +45,8 @@ function RouteGate({
 
   useEffect(() => {
     let active = true;
+
+    setState({ loading: true, user: null });
 
     getCurrentUser()
       .then((user) => {
@@ -82,31 +89,17 @@ function RouteGate({
   return <>{children}</>;
 }
 
-function NotFoundPage() {
-  return (
-    <main className="route-not-found">
-      <span>404</span>
-      <h1>This page wandered off.</h1>
-      <p>The route doesn't exist or may have moved.</p>
-      <a href="/Home">Return to DevMind</a>
-    </main>
-  );
-}
-
 export function AppRouter() {
   return (
     <BrowserRouter>
       <UserProvider>
         <Routes>
-          {/* Landing page */}
           <Route path="/" element={<LandingPage />} />
 
           <Route path="/devmind" element={<Navigate to="/" replace />} />
 
-          {/* Login */}
           <Route path="/login" element={<LoginPage />} />
 
-          {/* Onboarding */}
           <Route
             path="/onboarding"
             element={
@@ -116,7 +109,6 @@ export function AppRouter() {
             }
           />
 
-          {/* Main DevMind application */}
           <Route
             path="/Home"
             element={
@@ -128,10 +120,8 @@ export function AppRouter() {
             }
           />
 
-          {/* Normalize lowercase URL */}
           <Route path="/home" element={<Navigate to="/Home" replace />} />
 
-          {/* User profile */}
           <Route
             path="/profile"
             element={
@@ -141,11 +131,13 @@ export function AppRouter() {
             }
           />
 
-          {/* Unknown routes */}
-          <Route path="*" element={<NotFoundPage />} />
+          {/* Public documentation and legal pages */}
+          <Route path="/docs" element={<DocsPage />} />
+          <Route path="/privacy" element={<PrivacyPolicyPage />} />
+          <Route path="/terms" element={<TermsPage />} />
+          <Route path="/about" element={<AboutPage />} />
 
-          <Route path="/Home" element={<DevMind />} />
-          <Route path="/profile" element={<ProfilePage />} />
+          <Route path="*" element={<ErrorPage type="404" />} />
         </Routes>
       </UserProvider>
     </BrowserRouter>

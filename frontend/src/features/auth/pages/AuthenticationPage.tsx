@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { useReducedMotion, motion } from "motion/react";
+import { Link } from "react-router-dom";
 
 const VIDEO_SRC = "/video/login.mp4";
 const POSTER_SRC = "/video/login-poster.jpg";
@@ -312,19 +313,19 @@ export default function AuthenticationPage() {
 
         <p className="mx-auto w-full max-w-95 text-center text-xs leading-6 text-[#666d61] lg:max-w-[30rem]">
           By continuing, you agree to our{" "}
-          <a
-            href="/terms"
+          <Link
+            to="/terms"
             className="text-[#a6ada0] underline decoration-white/15 underline-offset-4 hover:text-[#76B900]"
           >
             Terms
-          </a>{" "}
+          </Link>{" "}
           and{" "}
-          <a
-            href="/privacy"
+          <Link
+            to="/privacy"
             className="text-[#a6ada0] underline decoration-white/15 underline-offset-4 hover:text-[#76B900]"
           >
             Privacy Policy
-          </a>
+          </Link>
           .
         </p>
       </section>
