@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { FormEvent, ReactNode } from "react";
 import {
   AlertCircle,
-  ArrowDownToLine,
+  ArrowLeft,
   ArrowRight,
+  Bell,
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronsUpDown,
   Code2,
   Copy,
+  Crown,
   File,
   FileCode2,
   FileJson,
@@ -16,7 +19,9 @@ import {
   Folder,
   FolderOpen,
   GitBranch,
+  House,
   Info,
+  Layers,
   LoaderCircle,
   Lock,
   LockKeyhole,
@@ -25,20 +30,27 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Settings,
   ShieldCheck,
   Sparkles,
   Unplug,
+  UserRound,
   X,
 } from "lucide-react";
 import { FaGithub } from "react-icons/fa";
+import { useNavigate } from "react-router-dom";
+import { useUser } from "@/features/auth/context/UserContext";
+import UserAvatar from "@/shared/components/UserAvatar";
+import AccountDrawer from "@/features/Profile/components/AccountDrawer";
+import ProfileSetupDialog from "@/features/Profile/components/ProfileSetupDialog";
 import AiMascotInput from "../components/ui/ai-mascot-input";
-import type {
-  AIModel,
-  ChatSubmitData,
-} from "../components/ui/ai-mascot-input";
+import type { AIModel, ChatSubmitData } from "../components/ui/ai-mascot-input";
+import "../home.css";
+import BrandMark from "../components/BrandMark";
+import HomeDashboard from "../components/HomeDashboard";
 
 const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:5001"
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:5002"
 ).replace(/\/$/, "");
 
 /* ------------------------------------------------------------------ */
@@ -84,7 +96,8 @@ type GithubStatus = {
 type Notice = { type: "success" | "error" | "info"; text: string };
 type ChatMessage = { id: string; role: "user" | "assistant"; text: string };
 type RepairResult = JsonRecord;
-type SheetKind = "code" | "repair" | "analysis" | null;
+type SheetKind = "code" | "repair" | "analysis" | "rule" | null;
+type View = "home" | "repos" | "workspace";
 type ConsentAction = "chat" | "repair" | "analyze";
 type DragOpts = {
   els: HTMLElement[];
@@ -115,6 +128,8 @@ const DEPTH_NOTE: Record<string, string> = {
   medium: "Give a clear, balanced answer with the key details.",
   high: "Be thorough: reason step by step and cite specific file paths from the evidence.",
 };
+const FORMAT_NOTE =
+  "Format the answer so it is easy to read: start with a one-sentence summary; use numbered lists for steps and ordered findings; use short bullet points for details; use **bold** for key terms and `backticks` for file names, functions and code; keep paragraphs to 2-3 sentences; put any code in fenced code blocks.";
 const DEVMIND_MODELS: AIModel[] = [
   {
     id: "devmind",
@@ -170,8 +185,12 @@ function unwrapArray<T>(payload: unknown, keys: string[]): T[] {
   }
   return [];
 }
+/* `cache: "no-store"` matters here: GitHub connection state changes after the
+   OAuth redirect, and a revalidated/cached /status response (304) would keep
+   reporting "not connected" even though the account is linked. */
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
+    cache: "no-store",
     credentials: "include",
     ...init,
     headers: {
@@ -203,6 +222,81 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   return payload as T;
 }
+
+/* Accepts {connected}, {data:{connected}} and the isConnected variants. */
+function parseGithubStatus(raw: unknown): GithubStatus {
+  const payload = asRecord(raw);
+  const nested = asRecord(payload.data);
+  const connected = Boolean(
+    payload.connected ??
+    nested.connected ??
+    payload.isConnected ??
+    nested.isConnected,
+  );
+  return {
+    connected,
+    username: asString(
+      payload.username,
+      asString(
+        payload.login,
+        asString(nested.username, asString(nested.login)),
+      ),
+    ),
+    login: asString(payload.login, asString(nested.login)),
+    avatar_url: asString(
+      payload.avatar_url,
+      asString(
+        payload.avatarUrl,
+        asString(nested.avatar_url, asString(nested.avatarUrl)),
+      ),
+    ),
+    avatarUrl: asString(payload.avatarUrl, asString(nested.avatarUrl)),
+  };
+}
+
+/* The gateway returns fullName (camelCase); the UI uses full_name for API paths. */
+function normalizeRepos(payload: unknown): GithubRepo[] {
+  return unwrapArray<GithubRepo>(payload, ["repos", "items", "data"]).map(
+    (item) => {
+      const fullName =
+        (typeof item.full_name === "string" && item.full_name.trim()) ||
+        (typeof item.fullName === "string" && item.fullName.trim()) ||
+        "";
+      const fallbackName =
+        item.name || fullName.split("/").filter(Boolean).pop() || "Repository";
+      return {
+        ...item,
+        id: item.id ?? fullName ?? fallbackName,
+        name: fallbackName,
+        full_name: fullName || fallbackName,
+        default_branch: item.default_branch ?? item.defaultBranch ?? "main",
+        updated_at: item.updated_at ?? item.updatedAt,
+        html_url: item.html_url ?? item.url,
+      };
+    },
+  );
+}
+
+/* The backend redirects back with a short code in ?message=. */
+function describeGithubMessage(code: string): string {
+  switch (code) {
+    case "github_account_already_linked":
+      return "This GitHub account is already linked to a different DevMind account. Sign in with that account, or disconnect GitHub there first.";
+    case "invalid_oauth_state":
+    case "expired_oauth_state":
+      return "The GitHub sign-in expired. Please try connecting again.";
+    case "github_authorization_failed":
+      return "GitHub authorization failed. Please try again.";
+    case "github_identity_unverified":
+      return "GitHub could not verify this account. Please try again.";
+    default:
+      return code || "GitHub connection failed.";
+  }
+}
+
+const GITHUB_LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 const isDirectory = (entry: GithubEntry) => entry.type === "dir";
 
 /* Sort by depth first so a parent folder is always indexed before its children. */
@@ -395,7 +489,94 @@ function Orb({ size = 30 }: { size?: number }) {
     </span>
   );
 }
-/* Renders ``` fenced blocks as code, everything else as paragraphs */
+/* Renders AI replies: headings, numbered lists, bullet points, **bold**, `code` and fenced code blocks */
+type ListItem = { text: string; sub: string[] };
+type Block =
+  | { t: "h"; text: string }
+  | { t: "p"; text: string }
+  | { t: "ol"; start: number; items: ListItem[] }
+  | { t: "ul"; items: ListItem[] };
+
+function parseBlocks(src: string): Block[] {
+  const blocks: Block[] = [];
+  let para: string[] = [];
+  const flush = () => {
+    if (para.length) {
+      blocks.push({ t: "p", text: para.join(" ") });
+      para = [];
+    }
+  };
+  for (const raw of src.split("\n")) {
+    const line = raw.replace(/\s+$/, "");
+    if (!line.trim()) {
+      flush();
+      continue;
+    }
+    const h = /^\s{0,3}#{1,4}\s+(.*)$/.exec(line);
+    if (h) {
+      flush();
+      blocks.push({ t: "h", text: h[1] });
+      continue;
+    }
+    const ol = /^(\s*)(\d+)[.)]\s+(.*)$/.exec(line);
+    const ul = /^(\s*)[-*•]\s+(.*)$/.exec(line);
+    const last = blocks[blocks.length - 1];
+    if (ol || ul) {
+      flush();
+      const indent = (ol ? ol[1] : ul![1]).length;
+      const text = ol ? ol[3] : ul![2];
+      if (
+        indent >= 2 &&
+        last &&
+        (last.t === "ol" || last.t === "ul") &&
+        last.items.length
+      ) {
+        last.items[last.items.length - 1].sub.push(text);
+      } else if (ol) {
+        if (last && last.t === "ol") last.items.push({ text, sub: [] });
+        else
+          blocks.push({
+            t: "ol",
+            start: Number(ol[2]),
+            items: [{ text, sub: [] }],
+          });
+      } else if (last && last.t === "ul") last.items.push({ text, sub: [] });
+      else blocks.push({ t: "ul", items: [{ text, sub: [] }] });
+      continue;
+    }
+    // a wrapped, indented line continues the previous list item
+    if (
+      !para.length &&
+      /^\s{2,}\S/.test(line) &&
+      last &&
+      (last.t === "ol" || last.t === "ul") &&
+      last.items.length
+    ) {
+      last.items[last.items.length - 1].text += " " + line.trim();
+      continue;
+    }
+    para.push(line.trim());
+  }
+  flush();
+  return blocks;
+}
+function Inline({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, i) =>
+        part.length > 4 && part.startsWith("**") && part.endsWith("**") ? (
+          <strong key={i}>{part.slice(2, -2)}</strong>
+        ) : part.length > 2 && part.startsWith("`") && part.endsWith("`") ? (
+          <code key={i} className="dm-ic-code">
+            {part.slice(1, -1)}
+          </code>
+        ) : (
+          <span key={i}>{part}</span>
+        ),
+      )}
+    </>
+  );
+}
 function Rich({ text }: { text: string }): ReactNode {
   const bits = text.split(/```[\w-]*\n?([\s\S]*?)```/g);
   return (
@@ -405,29 +586,78 @@ function Rich({ text }: { text: string }): ReactNode {
           <pre key={i} className="dm-codeblock">
             <code>{b.replace(/\n$/, "")}</code>
           </pre>
-        ) : b.trim() ? (
-          <p key={i}>{b.trim()}</p>
-        ) : null,
+        ) : (
+          parseBlocks(b).map((blk, j) => {
+            const k = `${i}-${j}`;
+            if (blk.t === "h")
+              return (
+                <h3 key={k} className="dm-md-h">
+                  <Inline text={blk.text} />
+                </h3>
+              );
+            if (blk.t === "p")
+              return (
+                <p key={k}>
+                  <Inline text={blk.text} />
+                </p>
+              );
+            const List = blk.t === "ol" ? "ol" : "ul";
+            return (
+              <List
+                key={k}
+                className={blk.t === "ol" ? "dm-ol" : "dm-ul"}
+                style={
+                  blk.t === "ol"
+                    ? { counterReset: `dm-n ${blk.start - 1}` }
+                    : undefined
+                }
+              >
+                {blk.items.map((it, n) => (
+                  <li key={n}>
+                    <div className="dm-li-body">
+                      <Inline text={it.text} />
+                      {it.sub.length > 0 && (
+                        <ul className="dm-ul sub">
+                          {it.sub.map((sx, m) => (
+                            <li key={m}>
+                              <div className="dm-li-body">
+                                <Inline text={sx} />
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </List>
+            );
+          })
+        ),
       )}
     </>
   );
 }
-function Finding({ f }: { f: unknown }) {
+function Finding({ f, n }: { f: unknown; n?: number }) {
   const r = asRecord(f);
   const sev = asString(r.severity, asString(r.level, asString(r.type)));
   const msg = asString(r.message, asString(r.description, asString(r.title)));
-  const line = r.line != null ? `Line ${String(r.line)}` : "";
   const rule = asString(r.rule, asString(r.rule_id, asString(r.id)));
-  if (!msg)
+  const src = asString(r.source);
+  const evidence = typeof r.evidence === "string" ? r.evidence : "";
+  if (!msg && !rule)
     return <pre className="dm-repair">{JSON.stringify(f, null, 2)}</pre>;
   return (
     <div className="dm-finding">
       <div className="dm-find-top">
+        {n != null && <span className="dm-num">{n}</span>}
         {sev && <span className={`dm-sev ${sev.toLowerCase()}`}>{sev}</span>}
-        {line && <span>{line}</span>}
+        {r.line != null && <span>Line {String(r.line)}</span>}
+        {src && <span>{src}</span>}
         {rule && <span className="dm-find-rule">{rule}</span>}
       </div>
-      <p>{msg}</p>
+      {msg && <p>{msg}</p>}
+      {evidence && <pre className="dm-evidence">{evidence}</pre>}
     </div>
   );
 }
@@ -500,6 +730,8 @@ function TreeItems({
 /* ------------------------------------------------------------------ */
 /*  Page                                                               */
 /* ------------------------------------------------------------------ */
+const SETUP_SKIPPED_KEY = "devmind.profileSetupSkipped";
+
 export default function DevMind() {
   const [status, setStatus] = useState<GithubStatus>({ connected: false });
   const [repos, setRepos] = useState<GithubRepo[]>([]);
@@ -532,6 +764,59 @@ export default function DevMind() {
   const [sheet, setSheet] = useState<SheetKind>(null);
   const [filesOpen, setFilesOpen] = useState(true);
   const [kb, setKb] = useState(false);
+  const [view, setView] = useState<View>("home");
+  const [globalQuery, setGlobalQuery] = useState("");
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [githubLogin, setGithubLogin] = useState("");
+  const [githubLoginError, setGithubLoginError] = useState("");
+
+  /* ---------- account: profile setup popup + sliding account panel ---------- */
+  const navigate = useNavigate();
+  const { user, status: userStatus, refresh: refreshUser } = useUser();
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [setupSkipped, setSetupSkipped] = useState(() => {
+    try {
+      return sessionStorage.getItem(SETUP_SKIPPED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const handle = user?.username ?? user?.email.split("@")[0] ?? "";
+  const showSetup =
+    userStatus === "authed" &&
+    !!user &&
+    !user.profileCompleted &&
+    !setupSkipped;
+
+  useEffect(() => {
+    // Onboarding just finished (client-side navigation): pick up the latest user.
+    void refreshUser();
+  }, [refreshUser]);
+
+  useEffect(() => {
+    if (userStatus === "anonymous") navigate("/login", { replace: true });
+  }, [userStatus, navigate]);
+
+  const skipSetup = () => {
+    try {
+      sessionStorage.setItem(SETUP_SKIPPED_KEY, "1");
+    } catch {
+      /* private mode: skip for this render only */
+    }
+    setSetupSkipped(true);
+  };
+
+  // Ctrl/⌘ + K focuses the search bar
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, []);
 
   const dR = useRef<HTMLElement>(null),
     dscR = useRef<HTMLDivElement>(null);
@@ -540,9 +825,12 @@ export default function DevMind() {
   const sscR = useRef<HTMLDivElement>(null),
     grR = useRef<HTMLDivElement>(null);
   const threadR = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const effortRef = useRef("medium");
-  const autoOpened = useRef(false);
   const pendingMessage = useRef("");
+  // Set when the status check already fetched the repo list, so the
+  // "connected → load repos" effect doesn't request it a second time.
+  const skipRepoLoad = useRef(false);
   const api = useRef<{
     drawer: (o: boolean, v?: number) => void;
     sheet: (o: boolean, v?: number) => void;
@@ -683,45 +971,46 @@ export default function DevMind() {
   }, [chat, sending]);
 
   /* ---------- data: GitHub status, repos, branches, files ---------- */
-  const loadStatus = useCallback(async () => {
+
+  /* Resolves to true when GitHub is connected.
+     1) Ask /status (never cached).
+     2) If /status says "not connected", double-check with the repos endpoint:
+        if GitHub really returns repositories for this session, the account IS
+        connected and the stale/incorrect flag is overridden. */
+  const loadStatus = useCallback(async (): Promise<boolean> => {
     setLoadingStatus(true);
+    let next: GithubStatus = { connected: false };
+    let statusError = "";
     try {
-      const payload = asRecord(await request<unknown>("/api/github/status"));
-      const nested = asRecord(payload.data);
-      const connected = Boolean(
-        payload.connected ??
-        nested.connected ??
-        payload.isConnected ??
-        nested.isConnected,
-      );
-      setStatus({
-        connected,
-        username: asString(
-          payload.username,
-          asString(
-            payload.login,
-            asString(nested.username, asString(nested.login)),
-          ),
-        ),
-        login: asString(payload.login, asString(nested.login)),
-        avatar_url: asString(
-          payload.avatar_url,
-          asString(
-            payload.avatarUrl,
-            asString(nested.avatar_url, asString(nested.avatarUrl)),
-          ),
-        ),
-        avatarUrl: asString(payload.avatarUrl, asString(nested.avatarUrl)),
-      });
+      next = parseGithubStatus(await request<unknown>("/api/github/status"));
     } catch (error) {
-      setStatus({ connected: false });
+      statusError = error instanceof Error ? error.message : "";
+    }
+
+    if (!next.connected) {
+      try {
+        const list = normalizeRepos(
+          await request<unknown>("/api/github/repos?page=1&sort=updated"),
+        );
+        if (list.length) {
+          next = { ...next, connected: true };
+          skipRepoLoad.current = true;
+          setRepos(list);
+        }
+      } catch {
+        /* a failing repos call confirms GitHub is not connected */
+      }
+    }
+
+    setStatus(next);
+    if (!next.connected && statusError) {
       notify(
-        `GitHub status could not be loaded. Check the gateway route and API URL. ${error instanceof Error ? error.message : ""}`.trim(),
+        `GitHub status could not be loaded. Check the gateway route and API URL. ${statusError}`.trim(),
         "error",
       );
-    } finally {
-      setLoadingStatus(false);
     }
+    setLoadingStatus(false);
+    return next.connected;
   }, [notify]);
 
   const loadRepos = useCallback(async () => {
@@ -730,30 +1019,7 @@ export default function DevMind() {
       const payload = await request<unknown>(
         "/api/github/repos?page=1&sort=updated",
       );
-      const list = unwrapArray<GithubRepo>(payload, [
-        "repos",
-        "items",
-        "data",
-      ]).map((item) => {
-        const fullName =
-          (typeof item.full_name === "string" && item.full_name.trim()) ||
-          (typeof item.fullName === "string" && item.fullName.trim()) ||
-          "";
-        const fallbackName =
-          item.name ||
-          fullName.split("/").filter(Boolean).pop() ||
-          "Repository";
-        return {
-          ...item,
-          id: item.id ?? fullName ?? fallbackName,
-          name: fallbackName,
-          // The gateway returns fullName (camelCase); the UI uses full_name for API paths.
-          full_name: fullName || fallbackName,
-          default_branch: item.default_branch ?? item.defaultBranch ?? "main",
-          updated_at: item.updated_at ?? item.updatedAt,
-          html_url: item.html_url ?? item.url,
-        };
-      });
+      const list = normalizeRepos(payload);
       setRepos(list);
       if (!list.length)
         notify(
@@ -770,32 +1036,78 @@ export default function DevMind() {
     }
   }, [notify]);
 
+  // Connected (on first load, after the OAuth redirect, or after a re-check)
+  // → load the repositories so Home shows them immediately.
   useEffect(() => {
-    if (status.connected) void loadRepos();
-  }, [status.connected, loadRepos]);
-
-  /* first time after connecting with nothing imported yet: show the repository drawer */
-  useEffect(() => {
-    if (status.connected && repos.length && !repo && !autoOpened.current) {
-      autoOpened.current = true;
-      api.current.drawer(true);
+    if (!status.connected) return;
+    if (skipRepoLoad.current) {
+      skipRepoLoad.current = false;
+      return;
     }
-  }, [status.connected, repos, repo]);
+    void loadRepos();
+  }, [status.connected, loadRepos]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const githubResult = params.get("github");
-    if (githubResult === "success")
-      notify("GitHub connected successfully.", "success");
-    if (githubResult === "error")
-      notify(params.get("message") || "GitHub connection failed.", "error");
+    const githubMessage = params.get("message") || "";
     if (githubResult)
       window.history.replaceState({}, "", window.location.pathname); // don't re-toast on refresh
-    void loadStatus();
+
+    void (async () => {
+      const connected = await loadStatus();
+      if (githubResult === "success") {
+        if (connected)
+          notify(
+            githubMessage === "github_connected_transferred"
+              ? "GitHub connected. It was moved from your other DevMind account to this one."
+              : "GitHub connected successfully.",
+            "success",
+          );
+        else
+          notify(
+            "GitHub was authorized, but the server still reports it as not connected. Check that the OAuth callback saves the token for this account.",
+            "error",
+          );
+      } else if (githubResult === "error") {
+        // "already connected" style errors are really a success.
+        if (connected) notify("GitHub is already connected.", "success");
+        else notify(describeGithubMessage(githubMessage), "error");
+      }
+    })();
   }, [loadStatus, notify]);
 
-  const connectGithub = () => {
-    window.location.assign(`${API_BASE_URL}/api/github/connect`);
+  /* Never send an already-connected user back through OAuth. */
+  const connectGithub = async () => {
+    if (status.connected) {
+      notify(
+        `GitHub is already connected${status.username ? ` as ${status.username}` : ""}.`,
+        "success",
+      );
+      if (!repos.length && !loadingRepos) void loadRepos();
+      return;
+    }
+    const alreadyConnected = await loadStatus();
+    if (alreadyConnected) {
+      notify("GitHub is already connected.", "success");
+      return;
+    }
+    // Not connected for this DevMind account: ask which GitHub account to use.
+    setGithubLogin("");
+    setGithubLoginError("");
+    setConnectOpen(true);
+  };
+
+  const submitGithubLogin = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const value = githubLogin.trim();
+    if (value && !GITHUB_LOGIN_RE.test(value) && !EMAIL_RE.test(value)) {
+      setGithubLoginError("Enter a valid GitHub username or email.");
+      return;
+    }
+    setConnectOpen(false);
+    const query = value ? `?login=${encodeURIComponent(value)}` : "";
+    window.location.assign(`${API_BASE_URL}/api/github/connect${query}`);
   };
 
   const disconnectGithub = async () => {
@@ -814,7 +1126,6 @@ export default function DevMind() {
       setConsentKey(null);
       setConsentOpen(false);
       setPendingAction(null);
-      autoOpened.current = false;
       closeSheet();
       api.current.drawer(false);
       notify("GitHub disconnected.", "success");
@@ -899,6 +1210,11 @@ export default function DevMind() {
     setBranch(selectedRepo.default_branch || "main");
     closeSheet();
     api.current.drawer(false);
+
+    closeSheet();
+    api.current.drawer(false);
+    setView("workspace");
+    setLoadingFiles(true);
     setLoadingFiles(true);
     try {
       const encoded = selectedRepo.full_name
@@ -1040,8 +1356,8 @@ export default function DevMind() {
     const visited = new Set<string>();
     const snippets: string[] = [];
     let totalChars = 0;
-    const maxFiles = 30,
-      maxChars = 45000;
+    const maxFiles = 15,
+      maxChars = 15000;
 
     while (
       queue.length &&
@@ -1110,7 +1426,7 @@ export default function DevMind() {
           if (!content.trim()) continue;
           const clipped = content.slice(
             0,
-            Math.min(3500, maxChars - totalChars),
+            Math.min(2000, maxChars - totalChars),
           );
           snippets.push(`\n--- FILE: ${entry.path} ---\n${clipped}`);
           totalChars += clipped.length;
@@ -1129,7 +1445,7 @@ export default function DevMind() {
     if (!message || sending) return;
     if (!repo) {
       notify("Import a repository first.", "info");
-      api.current.drawer(true);
+      setView("repos");
       return;
     }
     if (!consentApproved && needConsent("chat")) {
@@ -1141,7 +1457,7 @@ export default function DevMind() {
     setSending(true);
     try {
       const repositoryContext = await fetchRepositoryContext(repo, branch);
-      const context = `You are reviewing the selected GitHub repository. Use only the evidence below and clearly state when evidence is insufficient. Do not claim files were inspected unless included below.\nRepository: ${repo.full_name}\nBranch: ${branch}\nRepository source excerpts (bounded scan; not guaranteed to include every file):\n${repositoryContext}${selectedFile ? `\nCurrently selected file: ${selectedFile.path}\nSelected file source:\n${sourceCode.slice(0, 10000)}` : ""}\n\n${DEPTH_NOTE[effortRef.current] ?? DEPTH_NOTE.medium}\n\nUser question: ${message}`;
+      const context = `You are reviewing the selected GitHub repository. Use only the evidence below and clearly state when evidence is insufficient. Do not claim files were inspected unless included below.\nRepository: ${repo.full_name}\nBranch: ${branch}\nRepository source excerpts (bounded scan; not guaranteed to include every file):\n${repositoryContext}${selectedFile ? `\nCurrently selected file: ${selectedFile.path}\nSelected file source:\n${sourceCode.slice(0, 10000)}` : ""}\n\n${DEPTH_NOTE[effortRef.current] ?? DEPTH_NOTE.medium}\n${FORMAT_NOTE}\n\nUser question: ${message}`;
       const payload = asRecord(
         await request<unknown>("/api/ai/chat", {
           method: "POST",
@@ -1254,7 +1570,10 @@ export default function DevMind() {
     }
   };
 
-  const requestRepair = async (consentApproved = false) => {
+  const requestRepair = async (
+    consentApproved = false,
+    chosenRule?: string,
+  ) => {
     if (!selectedFile || !sourceCode.trim() || repairing) {
       notify(
         "Choose a file with readable source code before requesting a repair.",
@@ -1270,6 +1589,39 @@ export default function DevMind() {
       return;
     }
     if (!consentApproved && needConsent("repair")) return;
+    const analysisFindings = Array.isArray(analysisResult?.findings)
+      ? analysisResult.findings.map((item) => asRecord(item))
+      : [];
+    if (!analysisFindings.length) {
+      notify(
+        "Run Analyze first so the repair can target a real scanner finding.",
+        "info",
+      );
+      return;
+    }
+    const availableRules = Array.from(
+      new Set(
+        analysisFindings.map((f) => asString(f.rule).trim()).filter(Boolean),
+      ),
+    );
+    if (!availableRules.length) {
+      notify(
+        "The analysis result does not contain a scanner rule that can be repaired.",
+        "info",
+      );
+      return;
+    }
+    const rule =
+      chosenRule ??
+      (availableRules.length === 1 ? availableRules[0] : undefined);
+    if (!rule) {
+      openSheet("rule");
+      return;
+    } // let the person pick the exact rule
+    if (!availableRules.includes(rule)) {
+      notify("Choose an exact rule ID from the analysis findings.", "error");
+      return;
+    }
     setRepairing(true);
     setRepairResult(null);
     try {
@@ -1280,7 +1632,7 @@ export default function DevMind() {
             language: "python",
             source_code: sourceCode,
             filename: selectedFile.name,
-            rule: "manual-review",
+            rule,
           }),
         }),
       );
@@ -1290,6 +1642,10 @@ export default function DevMind() {
           : asRecord(payload.repair ?? payload.data ?? payload),
       );
       openSheet("repair");
+      notify(
+        "Repair response received. Review it before applying any changes.",
+        "success",
+      );
     } catch (error) {
       notify(
         `Repair request failed. ${error instanceof Error ? error.message : ""}`,
@@ -1300,8 +1656,8 @@ export default function DevMind() {
     }
   };
 
-  const repairText = useMemo(() => {
-    if (!repairResult) return "";
+  const repair = useMemo(() => {
+    if (!repairResult) return { text: "", isCode: true };
     for (const key of [
       "proposed_code",
       "proposedCode",
@@ -1309,15 +1665,17 @@ export default function DevMind() {
       "fixedCode",
       "code",
       "content",
-      "suggestion",
-      "explanation",
-      "message",
     ]) {
       if (typeof repairResult[key] === "string")
-        return repairResult[key] as string;
+        return { text: repairResult[key] as string, isCode: true };
     }
-    return JSON.stringify(repairResult, null, 2);
+    for (const key of ["suggestion", "explanation", "message"]) {
+      if (typeof repairResult[key] === "string")
+        return { text: repairResult[key] as string, isCode: false };
+    }
+    return { text: JSON.stringify(repairResult, null, 2), isCode: true };
   }, [repairResult]);
+  const repairText = repair.text;
 
   const analysisSummary = asRecord(analysisResult?.summary);
   const rawFindings = analysisResult?.findings;
@@ -1326,6 +1684,21 @@ export default function DevMind() {
   const limitations: string[] = Array.isArray(rawLimits)
     ? rawLimits.map(String)
     : [];
+  const explanationRecord = asRecord(analysisResult?.ai_explanations);
+  const explanations: JsonRecord[] = Array.isArray(
+    explanationRecord.explanations,
+  )
+    ? explanationRecord.explanations.map((item) => asRecord(item))
+    : Array.isArray(analysisResult?.explanations)
+      ? analysisResult.explanations.map((item) => asRecord(item))
+      : [];
+  const repairRules = Object.entries(
+    findings.reduce<Record<string, number>>((acc, f) => {
+      const rule = asString(asRecord(f).rule).trim();
+      if (rule) acc[rule] = (acc[rule] ?? 0) + 1;
+      return acc;
+    }, {}),
+  ).map(([rule, count]) => ({ rule, count }));
 
   const copy = (value: string, label: string) => {
     if (!navigator.clipboard) {
@@ -1335,6 +1708,97 @@ export default function DevMind() {
     void navigator.clipboard
       .writeText(value)
       .then(() => notify(`${label} copied.`, "success"));
+  };
+  const downloadAnalysisReport = (format: "markdown" | "json") => {
+    if (!analysisResult) return;
+    const summary = asRecord(analysisResult.summary);
+    const rawList = Array.isArray(analysisResult.findings)
+      ? analysisResult.findings.map((item) => asRecord(item))
+      : [];
+    const report = {
+      generated_at: new Date().toISOString(),
+      repository: repo?.full_name ?? null,
+      branch: branch || null,
+      filename: selectedFile?.path ?? selectedFile?.name ?? null,
+      language: asString(analysisResult.language, "unknown"),
+      analysis_level: asString(analysisResult.analysis_level, "unknown"),
+      status: asString(analysisResult.status, "unknown"),
+      analyzers: Array.isArray(analysisResult.analyzers)
+        ? analysisResult.analyzers
+        : [],
+      summary,
+      findings: rawList,
+      ai_explanations: explanations,
+      limitations: Array.isArray(analysisResult.limitations)
+        ? analysisResult.limitations
+        : [],
+      note: "Generated from read-only analysis. No repository files were changed.",
+    };
+    const markdown = [
+      "# DevMind Code Analysis Report",
+      "",
+      `- Generated: ${report.generated_at}`,
+      `- Repository: ${report.repository ?? "Not connected"}`,
+      `- Branch: ${report.branch ?? "Unknown"}`,
+      `- File: ${report.filename ?? "Unknown"}`,
+      `- Language: ${report.language}`,
+      `- Analysis level: ${report.analysis_level}`,
+      `- Status: ${report.status}`,
+      `- Analyzers: ${report.analyzers.map(String).join(", ") || "Not reported"}`,
+      "",
+      "## Summary",
+      ...Object.entries(summary).map(
+        ([key, value]) => `- ${key.replace(/_/g, " ")}: ${String(value)}`,
+      ),
+      "",
+      "## Findings",
+      ...(rawList.length
+        ? rawList.flatMap((finding, index) => [
+            `### ${index + 1}. ${asString(finding.rule, "Unclassified finding")}`,
+            `- Severity: ${asString(finding.severity, "unknown")}`,
+            `- Line: ${String(finding.line ?? "Not reported")}`,
+            `- Message: ${asString(finding.message, "No message provided")}`,
+            `- Source: ${asString(finding.source, "Not reported")}`,
+            `- Evidence: ${asString(finding.evidence, "Not provided")}`,
+            "",
+          ])
+        : ["No findings were reported.", ""]),
+      "## AI Explanations",
+      ...(explanations.length
+        ? explanations.flatMap((item, index) => [
+            `### ${index + 1}. ${asString(item.rule, "Finding explanation")}`,
+            `- Root cause: ${asString(item.root_cause, "Not provided")}`,
+            `- Impact: ${asString(item.impact, "Not provided")}`,
+            `- Suggested fix: ${asString(item.suggested_fix, "Not provided")}`,
+            `- Confidence: ${String(item.confidence ?? "Not reported")}`,
+            "",
+          ])
+        : ["No AI explanations were returned.", ""]),
+      "## Limitations",
+      ...(report.limitations.length
+        ? report.limitations.map((item) => `- ${String(item)}`)
+        : ["- No limitations were reported."]),
+      "",
+      `> ${report.note}`,
+      "",
+    ].join("\n");
+    const content =
+      format === "json" ? JSON.stringify(report, null, 2) : markdown;
+    const mime =
+      format === "json"
+        ? "application/json;charset=utf-8"
+        : "text/markdown;charset=utf-8";
+    const blobUrl = URL.createObjectURL(new Blob([content], { type: mime }));
+    const anchor = document.createElement("a");
+    const safeName = (selectedFile?.name || "analysis")
+      .replace(/[^a-zA-Z0-9._-]/g, "_")
+      .replace(/\.[^.]+$/, "");
+    anchor.href = blobUrl;
+    anchor.download = `devmind-${safeName}-report.${format === "json" ? "json" : "md"}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
   };
   const refreshAll = () => {
     void loadRepos();
@@ -1352,13 +1816,61 @@ export default function DevMind() {
     );
   };
 
+  /* ---------- Home / Repositories / Workspace navigation ---------- */
+  const isFree = !user?.selectedPlan || user.selectedPlan === "Free";
+  const planLabel = `${user?.selectedPlan ?? "Free"} Plan`;
+  const displayName = user?.name?.trim() || handle || "there";
+  const modKey =
+    typeof navigator !== "undefined" &&
+    /Mac|iPhone|iPad/i.test(navigator.platform)
+      ? "⌘"
+      : "Ctrl";
+  const searchPlaceholder =
+    typeof window !== "undefined" &&
+    window.matchMedia("(max-width: 699px)").matches
+      ? "Search or ask anything…"
+      : "Search repositories, files, or ask anything…";
+
+  const goView = (v: View) => {
+    setView(v);
+    api.current.drawer(false);
+  };
+  const startChat = () => {
+    setChat([]);
+    setPrompt("");
+    if (repo) setView("workspace");
+    else {
+      setView("repos");
+      notify("Import a repository to start a chat.", "info");
+    }
+  };
+  const startAnalyze = () => {
+    if (repo) {
+      setView("workspace");
+      notify("Pick a file, then tap Analyze.", "info");
+    } else {
+      setView("repos");
+      notify("Import a repository to analyze its code.", "info");
+    }
+  };
+  const submitGlobalSearch = () => {
+    const q = globalQuery.trim();
+    if (!q) return;
+    if (repo) {
+      setView("workspace");
+      setGlobalQuery("");
+      void sendPrompt(q);
+    } else {
+      setRepoSearch(q);
+      setView("repos");
+    }
+  };
+
   /* ---------- shared fragments ---------- */
   const voiceOk =
     typeof window !== "undefined" &&
     ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
   const chatEmpty = chat.length === 0 && !sending;
-  const avatar = status.avatar_url || status.avatarUrl;
-  const initial = (status.username || "D").slice(0, 1).toUpperCase();
 
   const search = (
     value: string,
@@ -1397,8 +1909,12 @@ export default function DevMind() {
     <div className="dm-repos">
       {visibleRepos.map((item) => {
         const on = repo?.full_name === item.full_name;
-        const act = () =>
-          on ? api.current.drawer(false) : void chooseRepo(item);
+        const act = () => {
+          if (on) {
+            setView("workspace");
+            api.current.drawer(false);
+          } else void chooseRepo(item);
+        };
         return (
           <div key={String(item.id)} className={`dm-repo ${on ? "on" : ""}`}>
             <button className="dm-repo-main dm-press" onClick={act}>
@@ -1456,7 +1972,10 @@ export default function DevMind() {
           <Unplug size={17} /> Disconnect
         </button>
       ) : (
-        <button className="dm-btn g dm-press" onClick={connectGithub}>
+        <button
+          className="dm-btn g dm-press"
+          onClick={() => void connectGithub()}
+        >
           <FaGithub size={18} /> Connect GitHub
         </button>
       )}
@@ -1587,327 +2106,465 @@ export default function DevMind() {
     <div className={`dm-app ${kb ? "kb" : ""}`}>
       <style>{styles}</style>
 
-      {/* repository drawer (persistent sidebar on desktop) */}
-      <aside ref={dR} className="dm-drawer dm-glass" aria-label="Repositories">
+      {/* sidebar (persistent on desktop, swipe-out drawer on phones) */}
+      <aside ref={dR} className="dm-drawer" aria-label="Sidebar">
         <div className="dm-brand">
-          <Orb size={34} />
-          DevMind
+          <BrandMark />
+          <span>DevMind</span>
         </div>
-        {search(
-          repoSearch,
-          setRepoSearch,
-          "Find repository",
-          !status.connected,
-        )}
-        <div className="dm-side-scroll">{repoRows}</div>
-        {connection}
+
+        <nav className="dm-nav" aria-label="Main">
+          <button
+            className={`dm-nav-i dm-press ${view === "home" ? "on" : ""}`}
+            aria-current={view === "home" ? "page" : undefined}
+            onClick={() => goView("home")}
+          >
+            <House size={22} strokeWidth={1.7} /> Home
+          </button>
+          <button
+            className={`dm-nav-i dm-press ${view !== "home" ? "on" : ""}`}
+            aria-current={view !== "home" ? "page" : undefined}
+            onClick={() => goView("repos")}
+          >
+            <Layers size={22} strokeWidth={1.7} /> Repositories
+          </button>
+          <button
+            className="dm-nav-i dm-press"
+            onClick={() => navigate("/profile")}
+          >
+            <UserRound size={22} strokeWidth={1.7} /> Profile
+          </button>
+          <button
+            className="dm-nav-i dm-press"
+            onClick={() => navigate("/profile#connections")}
+          >
+            <Settings size={22} strokeWidth={1.7} /> Settings
+          </button>
+        </nav>
+
+        <div className="dm-side-foot">
+          {isFree && (
+            <div className="dm-upsell">
+              <span className="dm-upsell-ic">
+                <Crown size={22} />
+              </span>
+              <strong>Upgrade to Pro</strong>
+              <p>Get more AI power, more repositories, and priority support.</p>
+              <button
+                className="dm-btn g dm-press"
+                onClick={() => navigate("/profile#plan")}
+              >
+                Upgrade Now <ArrowRight size={16} />
+              </button>
+            </div>
+          )}
+          {user && (
+            <button
+              className="dm-user dm-only-mobile dm-press"
+              onClick={() => {
+                api.current.drawer(false);
+                setAccountOpen(true);
+              }}
+              aria-haspopup="dialog"
+              aria-label="Open account menu"
+            >
+              <UserAvatar
+                avatar={user.avatar}
+                fallbackSeed={handle}
+                size={40}
+              />
+              <span className="dm-user-tx">
+                <strong className="dm-truncate">@{handle}</strong>
+                <small className="dm-truncate">{user.email}</small>
+              </span>
+              <ChevronsUpDown size={16} className="dm-dim-ic" />
+            </button>
+          )}
+        </div>
       </aside>
       <div ref={dscR} className="dm-dscrim" />
 
       <div className="dm-shell">
-        <header className="dm-top dm-glass">
+        <header className="dm-top">
           <button
             className="dm-ib dm-press dm-menu"
-            aria-label="Repositories"
+            aria-label="Open menu"
             onClick={() => api.current.drawer(true)}
           >
             <Menu size={20} />
           </button>
-          {status.connected ? (
-            <div className="dm-title two">
-              <strong className="dm-truncate">
-                {repo ? repo.full_name : "Choose a repository"}
-              </strong>
-              <span className="dm-truncate">
-                {repo
-                  ? `${branch} · ${repo.private ? "Private" : "Public"}`
-                  : "Open the menu to import one"}
-              </span>
-            </div>
-          ) : (
-            <div className="dm-title">DevMind</div>
-          )}
-          <button
-            className="dm-ib dm-press"
-            aria-label={
-              status.connected ? "Refresh from GitHub" : "Refresh GitHub status"
-            }
-            onClick={() =>
-              status.connected ? refreshAll() : void loadStatus()
-            }
-            disabled={loadingStatus || loadingRepos}
+
+          <form
+            className="dm-gsearch"
+            role="search"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitGlobalSearch();
+            }}
           >
-            <RefreshCw
-              size={18}
-              className={loadingStatus || loadingRepos ? "dm-spin" : ""}
+            <Search size={19} />
+            <input
+              ref={searchRef}
+              value={globalQuery}
+              onChange={(e) => setGlobalQuery(e.target.value)}
+              placeholder={searchPlaceholder}
+              aria-label="Search repositories, files, or ask anything"
+              enterKeyHint="search"
+              autoCapitalize="none"
+              autoCorrect="off"
             />
+            <span className="dm-kbd" aria-hidden="true">
+              <kbd>{modKey}</kbd>
+              <kbd>K</kbd>
+            </span>
+          </form>
+
+          <button
+            className="dm-bell dm-press"
+            aria-label="Notifications"
+            onClick={() => notify("You are all caught up.", "info")}
+          >
+            <Bell size={22} strokeWidth={1.7} />
           </button>
-          <div className="dm-avatar" aria-hidden="true">
-            {avatar ? <img src={avatar} alt="" /> : initial}
-          </div>
+
+          {user && (
+            <button
+              className="dm-chip-user dm-press"
+              aria-label="Open account menu"
+              aria-haspopup="dialog"
+              onClick={() => setAccountOpen(true)}
+            >
+              <span className="dm-av-round">
+                <UserAvatar
+                  avatar={user.avatar}
+                  fallbackSeed={handle}
+                  size={42}
+                />
+              </span>
+              <span className="dm-chip-tx">
+                <strong className="dm-truncate">{displayName}</strong>
+                <small>{planLabel}</small>
+              </span>
+              <ChevronDown size={16} className="dm-chip-chev" />
+            </button>
+          )}
         </header>
 
         <main className="dm-content">
-          {!status.connected ? (
-            /* ---------- before connecting (unchanged) ---------- */
+          {view === "home" ? (
+            <HomeDashboard
+              displayName={displayName}
+              planLabel={planLabel}
+              isFree={isFree}
+              connected={status.connected}
+              loading={loadingStatus || loadingRepos}
+              repos={repos}
+              onNewChat={startChat}
+              onConnect={() => void connectGithub()}
+              onImport={() =>
+                notify(
+                  "ZIP import is not connected to a backend endpoint yet. Use GitHub for live repository browsing.",
+                  "info",
+                )
+              }
+              onAnalyze={startAnalyze}
+              onExplore={() => setView("repos")}
+              onOpenRepo={(r) => void chooseRepo(r)}
+              onAddRepo={() => setView("repos")}
+              onUpgrade={() => navigate("/profile#plan")}
+              onDocs={() => notify("Documentation is coming soon.", "info")}
+              onSettings={() => navigate("/profile")}
+            />
+          ) : view === "repos" ? (
             <div className="dm-scroll">
-              <section className="dm-home">
-                <Orb size={56} />
-                <h1>Understand your code.</h1>
-                <p>
-                  Connect a repository to explore it, ask questions with
-                  context, and review AI-proposed repairs.
-                </p>
-                {loadingStatus ? (
-                  <div className="dm-state">
-                    <Spin /> Checking GitHub…
+              <section className="dm-page">
+                <div className="dm-page-head">
+                  <div>
+                    <h1>Repositories</h1>
+                    <p>
+                      {status.connected
+                        ? `${repos.length} repositories from GitHub`
+                        : "Connect GitHub to import your code."}
+                    </p>
                   </div>
-                ) : (
-                  <>
-                    <div className="dm-cta">
-                      <button
-                        className="dm-btn g dm-press"
-                        onClick={connectGithub}
-                      >
-                        <FaGithub size={19} /> Connect GitHub{" "}
-                        <ArrowRight size={17} />
-                      </button>
-                      <button
-                        className="dm-btn o dm-press"
-                        onClick={() =>
-                          notify(
-                            "ZIP import is not connected to a backend endpoint yet. Use GitHub for live repository browsing.",
-                            "info",
-                          )
-                        }
-                      >
-                        <ArrowDownToLine size={17} /> Import a project
-                      </button>
-                    </div>
-                    <div className="dm-trust">
-                      <ShieldCheck size={15} /> You choose what to inspect.
-                      Repairs stay proposals until you review them.
-                    </div>
-                  </>
+                  <button
+                    className="dm-ib dm-press"
+                    aria-label="Refresh from GitHub"
+                    onClick={() =>
+                      status.connected ? refreshAll() : void loadStatus()
+                    }
+                    disabled={loadingStatus || loadingRepos}
+                  >
+                    <RefreshCw
+                      size={18}
+                      className={loadingStatus || loadingRepos ? "dm-spin" : ""}
+                    />
+                  </button>
+                </div>
+                {search(
+                  repoSearch,
+                  setRepoSearch,
+                  "Find repository",
+                  !status.connected,
                 )}
+                <div className="dm-page-grid">
+                  <div>{repoRows}</div>
+                  {connection}
+                </div>
               </section>
             </div>
           ) : (
             /* ---------- after connecting: Files | DevMind AI, as sketched ---------- */
-            <div className="dm-stack">
-              <section
-                className={`dm-card dm-files ${filesOpen ? "open" : ""}`}
-              >
-                <div className="dm-ph dm-ph-files">
-                  <button
-                    className="dm-collapse dm-press"
-                    onClick={() => setFilesOpen((o) => !o)}
-                    aria-expanded={filesOpen}
-                  >
-                    <h2>Files</h2>
-                    <ChevronDown
-                      size={18}
-                      className={`dm-chev2 ${filesOpen ? "open" : ""}`}
-                    />
-                  </button>
-                  <label className={`dm-branch ${repo ? "" : "off"}`}>
-                    <GitBranch size={14} />
-                    <select
-                      value={branch}
-                      disabled={!repo}
-                      aria-label="Select branch"
-                      onChange={(e) => {
-                        if (!repo) return;
-                        setConsentKey(null);
-                        setAnalysisResult(null);
-                        setRepairResult(null);
-                        setBranch(e.target.value);
-                        void loadContents(repo, e.target.value);
-                        setSelectedFile(null);
-                        setSourceCode("");
-                      }}
+            <div className="dm-ws">
+              <div className="dm-ws-bar">
+                <button
+                  className="dm-ib sm dm-press"
+                  aria-label="Back to repositories"
+                  onClick={() => setView("repos")}
+                >
+                  <ArrowLeft size={18} />
+                </button>
+                <div className="dm-ws-title">
+                  <strong className="dm-truncate">
+                    {repo ? repo.full_name : "Choose a repository"}
+                  </strong>
+                  <span className="dm-truncate">
+                    {repo
+                      ? `${branch} · ${repo.private ? "Private" : "Public"}`
+                      : "Import one from Repositories"}
+                  </span>
+                </div>
+                <button
+                  className="dm-ib sm dm-press"
+                  aria-label="Refresh from GitHub"
+                  onClick={refreshAll}
+                  disabled={loadingStatus || loadingRepos}
+                >
+                  <RefreshCw
+                    size={17}
+                    className={loadingStatus || loadingRepos ? "dm-spin" : ""}
+                  />
+                </button>
+              </div>
+              <div className="dm-stack">
+                <section
+                  className={`dm-card dm-files ${filesOpen ? "open" : ""}`}
+                >
+                  <div className="dm-ph dm-ph-files">
+                    <button
+                      className="dm-collapse dm-press"
+                      onClick={() => setFilesOpen((o) => !o)}
+                      aria-expanded={filesOpen}
                     >
-                      {branches.length ? (
-                        branches.map((b) => (
-                          <option key={b.name} value={b.name}>
-                            {b.name}
-                          </option>
-                        ))
-                      ) : (
-                        <option value={branch}>{branch}</option>
-                      )}
-                    </select>
-                    <ChevronDown size={13} />
-                  </label>
-                </div>
-                <div className="dm-files-body">
-                  <div className="dm-pad">
-                    {search(fileSearch, setFileSearch, "Search files", !repo)}
-                  </div>
-                  <div className="dm-pscroll">
-                    {!repo ? (
-                      <div className="dm-empty">
-                        <span className="dm-empty-ic">
-                          <Folder size={24} />
-                        </span>
-                        <strong>No repository imported</strong>
-                        <span>Import one to browse its folders and files.</span>
-                        <button
-                          className="dm-btn g dm-press dm-inline-btn"
-                          onClick={() => api.current.drawer(true)}
-                        >
-                          <Plus size={17} /> Import a repository
-                        </button>
-                      </div>
-                    ) : loadingFiles ? (
-                      <div className="dm-state">
-                        <Spin size={18} /> Loading repository tree…
-                      </div>
-                    ) : tree.length ? (
-                      <TreeItems
-                        nodes={tree}
-                        depth={0}
-                        selected={selectedFile?.path || ""}
-                        expanded={expanded}
-                        onToggle={toggleDirectory}
-                        onSelect={(e) => void selectFile(e)}
+                      <h2>Files</h2>
+                      <ChevronDown
+                        size={18}
+                        className={`dm-chev2 ${filesOpen ? "open" : ""}`}
                       />
-                    ) : (
-                      <div className="dm-empty">
-                        <Folder size={26} />
-                        <strong>No files to display</strong>
-                        <span>Check the branch or clear your search.</span>
-                      </div>
-                    )}
+                    </button>
+                    <label className={`dm-branch ${repo ? "" : "off"}`}>
+                      <GitBranch size={14} />
+                      <select
+                        value={branch}
+                        disabled={!repo}
+                        aria-label="Select branch"
+                        onChange={(e) => {
+                          if (!repo) return;
+                          setConsentKey(null);
+                          setAnalysisResult(null);
+                          setRepairResult(null);
+                          setBranch(e.target.value);
+                          void loadContents(repo, e.target.value);
+                          setSelectedFile(null);
+                          setSourceCode("");
+                        }}
+                      >
+                        {branches.length ? (
+                          branches.map((b) => (
+                            <option key={b.name} value={b.name}>
+                              {b.name}
+                            </option>
+                          ))
+                        ) : (
+                          <option value={branch}>{branch}</option>
+                        )}
+                      </select>
+                      <ChevronDown size={13} />
+                    </label>
                   </div>
-                </div>
-              </section>
-
-              <section className="dm-card dm-aicard">
-                <div className="dm-ph dm-ph-ai">
-                  <div className="dm-ai-title">
-                    <div>
-                      <h2>DevMind AI</h2>
-                      <p>Codebase assistant</p>
+                  <div className="dm-files-body">
+                    <div className="dm-pad">
+                      {search(fileSearch, setFileSearch, "Search files", !repo)}
+                    </div>
+                    <div className="dm-pscroll">
+                      {!repo ? (
+                        <div className="dm-empty">
+                          <span className="dm-empty-ic">
+                            <Folder size={24} />
+                          </span>
+                          <strong>No repository imported</strong>
+                          <span>
+                            Import one to browse its folders and files.
+                          </span>
+                          <button
+                            className="dm-btn g dm-press dm-inline-btn"
+                            onClick={() => api.current.drawer(true)}
+                          >
+                            <Plus size={17} /> Import a repository
+                          </button>
+                        </div>
+                      ) : loadingFiles ? (
+                        <div className="dm-state">
+                          <Spin size={18} /> Loading repository tree…
+                        </div>
+                      ) : tree.length ? (
+                        <TreeItems
+                          nodes={tree}
+                          depth={0}
+                          selected={selectedFile?.path || ""}
+                          expanded={expanded}
+                          onToggle={toggleDirectory}
+                          onSelect={(e) => void selectFile(e)}
+                        />
+                      ) : (
+                        <div className="dm-empty">
+                          <Folder size={26} />
+                          <strong>No files to display</strong>
+                          <span>Check the branch or clear your search.</span>
+                        </div>
+                      )}
                     </div>
                   </div>
-                  {chat.length > 0 && (
-                    <button
-                      className="dm-ib sm dm-press"
-                      aria-label="New chat"
-                      onClick={() => setChat([])}
-                    >
-                      <Plus size={18} />
-                    </button>
-                  )}
-                </div>
-                <div
-                  className={`dm-thread ${chatEmpty ? "empty" : ""}`}
-                  ref={threadR}
-                  aria-live="polite"
-                >
-                  <div className="dm-thread-in">
-                    {chat.map((m) =>
-                      m.role === "user" ? (
-                        <div key={m.id} className="dm-msg user">
-                          <div className="dm-bubble">{m.text}</div>
-                        </div>
-                      ) : (
-                        <div key={m.id} className="dm-msg ai">
+                </section>
+
+                <section className="dm-card dm-aicard">
+                  <div className="dm-ph dm-ph-ai">
+                    <div className="dm-ai-title">
+                      <div>
+                        <h2>DevMind AI</h2>
+                        <p>Codebase assistant</p>
+                      </div>
+                    </div>
+                    {chat.length > 0 && (
+                      <button
+                        className="dm-ib sm dm-press"
+                        aria-label="New chat"
+                        onClick={() => setChat([])}
+                      >
+                        <Plus size={18} />
+                      </button>
+                    )}
+                  </div>
+                  <div
+                    className={`dm-thread ${chatEmpty ? "empty" : ""}`}
+                    ref={threadR}
+                    aria-live="polite"
+                  >
+                    <div className="dm-thread-in">
+                      {chat.map((m) =>
+                        m.role === "user" ? (
+                          <div key={m.id} className="dm-msg user">
+                            <div className="dm-bubble">{m.text}</div>
+                          </div>
+                        ) : (
+                          <div key={m.id} className="dm-msg ai">
+                            <Orb size={28} />
+                            <div className="dm-ai-text">
+                              <Rich text={m.text} />
+                            </div>
+                          </div>
+                        ),
+                      )}
+                      {sending && (
+                        <div className="dm-msg ai">
                           <Orb size={28} />
-                          <div className="dm-ai-text">
-                            <Rich text={m.text} />
+                          <div className="dm-ai-text dm-thinking">
+                            <Spin /> Thinking…
                           </div>
                         </div>
-                      ),
-                    )}
-                    {sending && (
-                      <div className="dm-msg ai">
-                        <Orb size={28} />
-                        <div className="dm-ai-text dm-thinking">
-                          <Spin /> Thinking…
-                        </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
-                </div>
-                <div className={`dm-mascot-wrap ${chatEmpty ? "center" : ""}`}>
-                  <div className="dm-mascot-in">
-                    {selectedFile && (
-                      <div className="dm-ctx-row">
-                        <span className="dm-ctx">
-                          <FileCode2 size={13} />
-                          <span className="dm-truncate">
-                            {selectedFile.path}
+                  <div
+                    className={`dm-mascot-wrap ${chatEmpty ? "center" : ""}`}
+                  >
+                    <div className="dm-mascot-in">
+                      {selectedFile && (
+                        <div className="dm-ctx-row">
+                          <span className="dm-ctx">
+                            <FileCode2 size={13} />
+                            <span className="dm-truncate">
+                              {selectedFile.path}
+                            </span>
                           </span>
-                        </span>
+                        </div>
+                      )}
+                      <div className="dark dm-mascot">
+                        <AiMascotInput
+                          value={prompt}
+                          onChange={setPrompt}
+                          isProcessing={sending}
+                          showWelcome={chatEmpty}
+                          title={
+                            repo
+                              ? `Ask about ${repo.name}`
+                              : "Import a repository to begin"
+                          }
+                          subtitle={
+                            repo
+                              ? "DevMind reads the code you choose and answers with context"
+                              : "Open the menu and tap Import on a repository"
+                          }
+                          placeholder={
+                            repo
+                              ? "Ask about your code…"
+                              : "Import a repository first…"
+                          }
+                          models={DEVMIND_MODELS}
+                          defaultModelId="devmind"
+                          enableAttachments={false}
+                          enableWebSearch={false}
+                          enableVoice={voiceOk}
+                          onSubmit={async (d: ChatSubmitData) => {
+                            effortRef.current = d.effort;
+                            await sendPrompt(d.prompt);
+                          }}
+                        />
                       </div>
-                    )}
-                    <div className="dark dm-mascot">
-                      <AiMascotInput
-                        value={prompt}
-                        onChange={setPrompt}
-                        isProcessing={sending}
-                        showWelcome={chatEmpty}
-                        title={
-                          repo
-                            ? `Ask about ${repo.name}`
-                            : "Import a repository to begin"
-                        }
-                        subtitle={
-                          repo
-                            ? "DevMind reads the code you choose and answers with context"
-                            : "Open the menu and tap Import on a repository"
-                        }
-                        placeholder={
-                          repo
-                            ? "Ask about your code…"
-                            : "Import a repository first…"
-                        }
-                        models={DEVMIND_MODELS}
-                        defaultModelId="devmind"
-                        enableAttachments={false}
-                        enableWebSearch={false}
-                        enableVoice={voiceOk}
-                        onSubmit={async (d: ChatSubmitData) => {
-                          effortRef.current = d.effort;
-                          await sendPrompt(d.prompt);
-                        }}
-                      />
-                    </div>
-                    {chatEmpty && repo && (
-                      <div className="dm-chips">
-                        {[
-                          [
-                            "Explain the architecture",
-                            "Explain the architecture of this repository.",
-                          ],
-                          [
-                            "Review security risks",
-                            "Review this file for security risks.",
-                          ],
-                          [
-                            "Suggest tests",
-                            "What tests should I add for this code?",
-                          ],
-                        ].map(([label, q]) => (
-                          <button
-                            key={label}
-                            className="dm-chip dm-press"
-                            onClick={() => void sendPrompt(q)}
-                          >
-                            {label}
-                          </button>
-                        ))}
+                      {chatEmpty && repo && (
+                        <div className="dm-chips">
+                          {[
+                            [
+                              "Explain the architecture",
+                              "Explain the architecture of this repository.",
+                            ],
+                            [
+                              "Review security risks",
+                              "Review this file for security risks.",
+                            ],
+                            [
+                              "Suggest tests",
+                              "What tests should I add for this code?",
+                            ],
+                          ].map(([label, q]) => (
+                            <button
+                              key={label}
+                              className="dm-chip dm-press"
+                              onClick={() => void sendPrompt(q)}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="dm-disc">
+                        <LockKeyhole size={11} /> AI can make mistakes. Verify
+                        changes.
                       </div>
-                    )}
-                    <div className="dm-disc">
-                      <LockKeyhole size={11} /> AI can make mistakes. Verify
-                      changes.
                     </div>
                   </div>
-                </div>
-              </section>
+                </section>
+              </div>
             </div>
           )}
         </main>
@@ -1946,6 +2603,8 @@ export default function DevMind() {
                     ["Errors", analysisSummary.errors],
                     ["Warnings", analysisSummary.warnings],
                     ["Security", analysisSummary.security_issues],
+                    ["Quality", analysisSummary.code_quality_issues],
+                    ["Potential secrets", analysisSummary.potential_secrets],
                   ] as const
                 ).map(([label, v]) => (
                   <span key={label}>
@@ -1954,18 +2613,73 @@ export default function DevMind() {
                   </span>
                 ))}
               </div>
+              <div className="dm-export">
+                <button
+                  className="dm-pill dm-press"
+                  onClick={() => downloadAnalysisReport("markdown")}
+                >
+                  <FileText size={15} /> Export Markdown
+                </button>
+                <button
+                  className="dm-pill dm-press"
+                  onClick={() => downloadAnalysisReport("json")}
+                >
+                  <FileJson size={15} /> Export JSON
+                </button>
+              </div>
               <div className="dm-sheet-scroll">
+                <h3 className="dm-sub-h">Findings</h3>
                 {findings.length ? (
-                  findings.map((f, i) => <Finding key={i} f={f} />)
+                  findings.map((f, i) => <Finding key={i} f={f} n={i + 1} />)
                 ) : (
                   <div className="dm-state">
                     No findings were reported by the configured analyzers.
                   </div>
                 )}
-                {limitations.length > 0 && (
+                <h3 className="dm-sub-h">
+                  AI explanations and suggested fixes
+                </h3>
+                {explanations.length ? (
+                  explanations.map((x, i) => (
+                    <div key={i} className="dm-finding">
+                      <div className="dm-find-top">
+                        <span className="dm-num">{i + 1}</span>
+                        <strong className="dm-find-title">
+                          {asString(x.rule, "Finding explanation")}
+                        </strong>
+                      </div>
+                      <ul className="dm-points">
+                        <li>
+                          <b>Root cause:</b>{" "}
+                          {asString(x.root_cause, "Not provided")}
+                        </li>
+                        <li>
+                          <b>Impact:</b> {asString(x.impact, "Not provided")}
+                        </li>
+                        <li>
+                          <b>Suggested fix:</b>{" "}
+                          {asString(x.suggested_fix, "Not provided")}
+                        </li>
+                      </ul>
+                      <small className="dm-dim">
+                        Confidence: {String(x.confidence ?? "not reported")}
+                      </small>
+                    </div>
+                  ))
+                ) : (
                   <p className="dm-sheet-note">
-                    Limitations: {limitations.join("; ")}
+                    No AI explanations were returned for this analysis.
                   </p>
+                )}
+                {limitations.length > 0 && (
+                  <>
+                    <h3 className="dm-sub-h">Limitations</h3>
+                    <ul className="dm-limits">
+                      {limitations.map((l, i) => (
+                        <li key={i}>{l}</li>
+                      ))}
+                    </ul>
+                  </>
                 )}
               </div>
               <div className="dm-two">
@@ -1977,6 +2691,46 @@ export default function DevMind() {
                 </button>
                 <button className="dm-btn w dm-press" onClick={closeSheet}>
                   Done
+                </button>
+              </div>
+            </div>
+          )}
+          {sheet === "rule" && (
+            <div className="dm-sheet-body">
+              <h2 className="dm-sheet-h">
+                <Sparkles size={18} /> Choose a finding
+              </h2>
+              <p className="dm-sheet-note">
+                Pick the exact scanner rule DevMind should propose a repair for.
+              </p>
+              <div className="dm-sheet-scroll">
+                {repairRules.map(({ rule, count }) => (
+                  <button
+                    key={rule}
+                    className="dm-rule dm-press"
+                    disabled={repairing}
+                    onClick={() => void requestRepair(true, rule)}
+                  >
+                    <span className="dm-rule-tx">
+                      <strong>{rule}</strong>
+                      <small>
+                        {count} finding{count === 1 ? "" : "s"}
+                      </small>
+                    </span>
+                    {repairing ? (
+                      <Spin />
+                    ) : (
+                      <ChevronRight size={16} className="dm-dim-ic" />
+                    )}
+                  </button>
+                ))}
+              </div>
+              <div className="dm-two">
+                <button
+                  className="dm-btn o dm-press"
+                  onClick={() => openSheet("code")}
+                >
+                  Back to code
                 </button>
               </div>
             </div>
@@ -2000,7 +2754,13 @@ export default function DevMind() {
                 repository.
               </p>
               <div className="dm-sheet-scroll">
-                <pre className="dm-repair">{repairText}</pre>
+                {repair.isCode ? (
+                  <pre className="dm-repair">{repairText}</pre>
+                ) : (
+                  <div className="dm-ai-text dm-repair-text">
+                    <Rich text={repairText} />
+                  </div>
+                )}
               </div>
               <div className="dm-two">
                 <button
@@ -2062,6 +2822,92 @@ export default function DevMind() {
         </div>
       )}
 
+      {connectOpen && (
+        <div
+          className="dm-consent"
+          role="presentation"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setConnectOpen(false);
+          }}
+        >
+          <form
+            className="dm-dialog dm-glass"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="dm-gh-title"
+            onSubmit={submitGithubLogin}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setConnectOpen(false);
+            }}
+            noValidate
+          >
+            <span className="dm-dialog-ic">
+              <FaGithub size={22} />
+            </span>
+            <h2 id="dm-gh-title">Connect your GitHub account</h2>
+            <p>
+              Enter the GitHub username or email you use. GitHub opens with it
+              pre-filled and you approve access there. If that GitHub account is
+              linked to another DevMind account, the link moves to this one.
+            </p>
+            <label className="dm-field">
+              <span>GitHub username or email</span>
+              <input
+                value={githubLogin}
+                onChange={(e) => {
+                  setGithubLogin(e.target.value);
+                  if (githubLoginError) setGithubLoginError("");
+                }}
+                placeholder="alan123 or you@example.com"
+                inputMode="email"
+                autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                enterKeyHint="go"
+                autoFocus
+                aria-invalid={Boolean(githubLoginError)}
+              />
+            </label>
+            {githubLoginError && (
+              <small className="dm-field-err" role="alert">
+                {githubLoginError}
+              </small>
+            )}
+            <div className="dm-two">
+              <button
+                type="button"
+                className="dm-btn o dm-press"
+                onClick={() => setConnectOpen(false)}
+              >
+                Cancel
+              </button>
+              <button type="submit" className="dm-btn g dm-press">
+                <FaGithub size={17} /> Continue
+              </button>
+            </div>
+            <small>
+              Optional. Leave it empty to pick the account on GitHub instead.
+            </small>
+          </form>
+        </div>
+      )}
+
+      <AccountDrawer
+        open={accountOpen}
+        onClose={() => setAccountOpen(false)}
+        github={{ connected: status.connected, username: status.username }}
+      />
+      {user && (
+        /* mounted once the user is known so the username default comes from their email */
+        <ProfileSetupDialog
+          key={user.id}
+          open={showSetup}
+          onDone={() => undefined}
+          onSkip={skipSetup}
+        />
+      )}
+
       {notice && (
         <button
           className={`dm-toast dm-glass ${notice.type}`}
@@ -2087,11 +2933,13 @@ export default function DevMind() {
 /*  Styles: black + white, NVIDIA green accent, mobile first            */
 /* ------------------------------------------------------------------ */
 const styles = `
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
 html{-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%;overscroll-behavior:none}
 body{margin:0;background:#000}
 .dm-app{--g:#76B900;--gd:rgba(118,185,0,.14);--t:#f5f5f7;--m:#8e8e93;--l:rgba(255,255,255,.1);--s:rgba(255,255,255,.06);--s2:rgba(255,255,255,.1);--ease:cubic-bezier(.2,.9,.2,1);
 display:flex;width:100%;height:var(--dm-vh,100dvh);background:#000;color:var(--t);overflow:hidden;
-font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.45;-webkit-font-smoothing:antialiased;font-optical-sizing:auto}
+--mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;font-optical-sizing:auto}
 :where(.dm-app) *{box-sizing:border-box;margin:0}
 :where(.dm-app) :where(button,[role=button]){font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 :where(.dm-app) button:disabled{opacity:.4;cursor:not-allowed}
@@ -2168,7 +3016,7 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",sy
 .dm-branch select{appearance:none;-webkit-appearance:none;background:none;border:0;outline:0;min-width:0;max-width:90px;color:var(--t);font-weight:600;text-overflow:ellipsis}.dm-branch option{background:#111}
 .dm-pad{padding:0 12px 4px}
 .dm-pscroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:4px 8px 10px;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column}
-.dm-tree-item{width:100%;min-height:46px;display:flex;align-items:center;gap:9px;padding-right:10px;border-radius:12px;font-size:15px;color:#d1d1d6}
+.dm-tree-item{width:100%;min-height:46px;display:flex;align-items:center;gap:9px;padding-right:10px;border-radius:12px;font-size:16px;color:#d1d1d6}
 .dm-tree-item.is-selected{background:var(--gd);color:#fff}
 .dm-chev{color:#636366;flex:none;transition:rotate .2s var(--ease)}.dm-chev.open{rotate:90deg}.dm-chev-gap{width:14px;flex:none}
 .dm-ic-dir{color:var(--g);flex:none}.dm-ic-file{color:var(--m);flex:none}
@@ -2178,7 +3026,7 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",sy
 .dm-meta{flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 16px;font-size:12px;color:var(--m);border-top:1px solid var(--l);border-bottom:1px solid var(--l);background:rgba(255,255,255,.03)}
 .dm-meta>span:first-child{display:flex;align-items:center;gap:7px}
 .dm-code-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;background:#050505;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column}
-.dm-source{display:flex;min-width:max-content;padding:12px 0 28px;font:12.5px/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.dm-source{display:flex;min-width:max-content;padding:12px 0 28px;font:12.5px/1.75 var(--mono)}
 .dm-source pre{margin:0;font:inherit}.dm-ln{position:sticky;left:0;min-width:46px;padding:0 10px;text-align:right;color:#4a4a4f;background:#050505;border-right:1px solid var(--l);user-select:none;-webkit-user-select:none}
 .dm-src{padding:0 16px;color:#e5e5ea;white-space:pre;tab-size:2;user-select:text;-webkit-user-select:text}
 /* chat */
@@ -2189,11 +3037,26 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",sy
 .dm-welcome .dm-chips{flex-wrap:wrap;justify-content:center;overflow:visible;padding:4px 0 0}
 .dm-msg{display:flex;gap:10px;animation:dmIn .4s var(--ease) both}.dm-msg.user{justify-content:flex-end}
 @keyframes dmIn{from{opacity:0;transform:translateY(8px)}}
-.dm-bubble{max-width:85%;padding:10px 16px;border-radius:22px 22px 6px 22px;background:var(--g);color:#000;font-weight:500;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
-.dm-ai-text{min-width:0;flex:1;padding-top:3px;color:#e5e5ea;line-height:1.6;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}.dm-ai-text p{white-space:pre-wrap;margin-bottom:6px}.dm-ai-text p:last-child{margin-bottom:0}
-.dm-ai-text strong{color:#fff}.dm-warn{font-size:13px;color:var(--m)}
+.dm-bubble{max-width:85%;font-size:16px;line-height:1.55;padding:10px 16px;border-radius:22px 22px 6px 22px;background:var(--g);color:#000;font-weight:500;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
+.dm-ai-text{min-width:0;flex:1;padding-top:2px;color:#ececf0;font-size:16px;line-height:1.7;letter-spacing:-.005em;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}.dm-ai-text p{margin:0 0 12px}.dm-ai-text>*:last-child{margin-bottom:0}
+.dm-ai-text strong,.dm-ai-text b{color:#fff;font-weight:650}.dm-warn{font-size:13px;color:var(--m)}
+.dm-md-h{margin:18px 0 8px;font-size:18px;font-weight:700;letter-spacing:-.02em;line-height:1.3;color:#fff}.dm-ai-text>.dm-md-h:first-child{margin-top:0}
+.dm-ol,.dm-ul{list-style:none;padding:0;margin:0 0 14px;display:flex;flex-direction:column;gap:10px}
+.dm-ol>li,.dm-ul>li{display:flex;gap:12px;align-items:flex-start}
+.dm-ol>li{counter-increment:dm-n}
+.dm-ol>li::before{content:counter(dm-n);flex:none;width:26px;height:26px;margin-top:1px;border-radius:50%;display:grid;place-items:center;background:var(--gd);color:var(--g);font-size:13px;font-weight:700;line-height:1}
+.dm-ul>li::before{content:"";flex:none;width:7px;height:7px;margin-top:.7em;border-radius:50%;background:var(--g)}
+.dm-ul.sub{margin:8px 0 2px;gap:6px}.dm-ul.sub>li::before{width:5px;height:5px;margin-top:.75em;background:#8e8e93}
+.dm-li-body{min-width:0;flex:1}
+.dm-ic-code{font-family:var(--mono);font-size:.86em;padding:2px 7px;border-radius:7px;background:rgba(255,255,255,.1);color:#d9f99d;overflow-wrap:anywhere}
+.dm-repair-text{padding:2px 2px 8px}
+.dm-num{width:24px;height:24px;flex:none;border-radius:50%;display:inline-grid;place-items:center;background:var(--gd);color:var(--g);font-size:12px;font-weight:700}
+.dm-points{list-style:none;padding:0;margin:10px 0 8px;display:flex;flex-direction:column;gap:8px}
+.dm-points li{position:relative;padding-left:16px;font-size:15px;line-height:1.55;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
+.dm-points li::before{content:"";position:absolute;left:0;top:.62em;width:6px;height:6px;border-radius:50%;background:var(--g)}
+.dm-points b{color:#fff}
 .dm-thinking{display:flex;align-items:center;gap:9px;color:var(--m)}
-.dm-codeblock{margin:8px 0;padding:12px 14px;border-radius:14px;background:#050505;border:1px solid var(--l);overflow-x:auto;font:12.5px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#e5e5ea}
+.dm-codeblock{margin:8px 0;padding:12px 14px;border-radius:14px;background:#050505;border:1px solid var(--l);overflow-x:auto;font:12.5px/1.6 var(--mono);color:#e5e5ea}
 .dm-chips{flex:none;display:flex;gap:8px;overflow-x:auto;padding:2px 14px 8px;touch-action:pan-x pan-y;scrollbar-width:none}.dm-chips::-webkit-scrollbar{display:none}
 .dm-chip{flex:none;height:40px;padding:0 15px;border-radius:99px;background:var(--s);border:1px solid var(--l);font-size:14px;font-weight:600}
 .dm-thread.empty{display:none}
@@ -2220,19 +3083,26 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",sy
 .dm-sheet.tall{height:92dvh;max-width:920px}
 .dm-grab{flex:none;touch-action:none;padding:10px 0 12px;cursor:grab}.dm-grab i{display:block;width:40px;height:5px;border-radius:9px;background:rgba(255,255,255,.3);margin:0 auto}
 .dm-sheet-code{flex:1;min-height:0;display:flex;flex-direction:column}
-.dm-sheet-body{display:flex;flex-direction:column;min-height:0;padding:0 16px 16px}
+.dm-sheet-body{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;padding:0 16px 16px}
 .dm-sec-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
 .dm-sheet-h{display:flex;align-items:center;gap:8px;font-size:24px;letter-spacing:-.035em;font-weight:700}.dm-sheet-h svg{color:var(--g)}
-.dm-sheet-note{color:var(--m);font-size:13px;margin-bottom:10px}
-.dm-sheet-scroll{overflow-y:auto;overscroll-behavior:contain;max-height:52dvh;-webkit-overflow-scrolling:touch;margin-bottom:6px}
-.dm-repair{margin:0;padding:14px;border-radius:16px;background:#050505;border:1px solid var(--l);white-space:pre-wrap;overflow-wrap:anywhere;font:12.5px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#e5e5ea;margin-bottom:12px;user-select:text;-webkit-user-select:text}
+.dm-sheet-note{color:var(--m);font-size:14px;line-height:1.55;margin-bottom:12px}
+.dm-sheet-scroll{overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;margin-bottom:10px;flex:1 1 auto;min-height:0}
+.dm-repair{margin:0;padding:14px;border-radius:16px;background:#050505;border:1px solid var(--l);white-space:pre-wrap;overflow-wrap:anywhere;font:12.5px/1.65 var(--mono);color:#e5e5ea;margin-bottom:12px;user-select:text;-webkit-user-select:text}
 .dm-two{display:flex;gap:10px}
 .dm-actions{flex:none;display:flex;gap:8px;overflow-x:auto;padding:0 16px 10px;touch-action:pan-x pan-y;scrollbar-width:none}.dm-actions::-webkit-scrollbar{display:none}
 .dm-lang{padding:3px 10px;border-radius:99px;background:var(--s2);font-size:12px;font-weight:600;color:var(--m)}
-.dm-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:2px 0 12px}
+.dm-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:2px 0 10px}
+.dm-export{display:flex;gap:8px;overflow-x:auto;margin:0 0 10px;scrollbar-width:none;touch-action:pan-x pan-y}.dm-export::-webkit-scrollbar{display:none}
+.dm-sub-h{margin:14px 2px 8px;font-size:16px;font-weight:700;letter-spacing:-.02em}.dm-sub-h:first-child{margin-top:2px}
+.dm-find-title{display:block;font-size:15px;letter-spacing:-.01em}.dm-dim{color:var(--m)}
+.dm-evidence{margin:8px 0 0;padding:10px 12px;border-radius:12px;background:#050505;border:1px solid var(--l);white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.55 var(--mono);color:#d1d1d6;user-select:text;-webkit-user-select:text}
+.dm-limits{padding-left:20px;color:var(--m);font-size:13px;line-height:1.6}
+.dm-rule{display:flex;align-items:center;gap:12px;width:100%;min-height:60px;padding:10px 14px;margin-bottom:8px;border-radius:16px;background:var(--s);border:1px solid var(--l)}
+.dm-rule-tx{flex:1;min-width:0;display:flex;flex-direction:column}.dm-rule-tx strong{font-size:15px;font-weight:600;overflow-wrap:anywhere}.dm-rule-tx small{font-size:12px;color:var(--m)}
 .dm-stats span{display:flex;flex-direction:column;padding:10px 12px;border-radius:16px;background:var(--s);border:1px solid var(--l)}.dm-stats strong{font-size:22px;letter-spacing:-.03em;line-height:1.1}.dm-stats small{font-size:12px;color:var(--m)}
-.dm-finding{padding:12px 14px;border-radius:16px;background:var(--s);border:1px solid var(--l);margin-bottom:8px}.dm-finding p{margin-top:6px;font-size:14px;line-height:1.5;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
-.dm-find-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--m)}.dm-find-rule{margin-left:auto;font-family:ui-monospace,monospace}
+.dm-finding{padding:12px 14px;border-radius:16px;background:var(--s);border:1px solid var(--l);margin-bottom:8px}.dm-finding p{margin-top:8px;font-size:15px;line-height:1.55;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
+.dm-find-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--m)}.dm-find-rule{margin-left:auto;font-family:ui-monospace,monospace}
 .dm-sev{padding:2px 9px;border-radius:99px;font-weight:700;background:var(--s2);color:var(--t);text-transform:capitalize}
 .dm-sev.error,.dm-sev.high,.dm-sev.critical{background:#fff;color:#000}.dm-sev.warning,.dm-sev.medium{background:var(--gd);color:var(--g)}
 .dm-consent{position:fixed;inset:0;z-index:70;display:grid;place-items:center;padding:20px;background:rgba(0,0,0,.72);animation:dmIn .3s var(--ease)}
@@ -2241,6 +3111,12 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",sy
 .dm-dialog h2{font-size:22px;line-height:1.2;letter-spacing:-.035em;font-weight:700}.dm-dialog p{font-size:14px;line-height:1.6;color:#aeaeb2}
 .dm-dialog-repo{display:flex;align-items:center;gap:8px;padding:12px;border-radius:14px;background:var(--s);border:1px solid var(--l);font-size:14px;font-weight:600}.dm-dialog-branch{display:flex;align-items:center;gap:4px;margin-left:auto;flex:none;font-size:12px;color:var(--m)}
 .dm-dialog small{font-size:12px;color:var(--m);line-height:1.5}
+.dm-field{display:flex;flex-direction:column;gap:8px;font-size:13px;font-weight:600;color:var(--m)}
+.dm-field input{min-height:50px;padding:0 16px;border-radius:14px;background:rgba(0,0,0,.35);border:1px solid var(--l);color:var(--t);outline:0;font-weight:500;transition:border-color .15s,box-shadow .15s}
+.dm-field input::placeholder{color:#6b7068}
+.dm-field input:focus{border-color:rgba(118,185,0,.6);box-shadow:0 0 0 4px rgba(118,185,0,.14)}
+.dm-field input[aria-invalid=true]{border-color:rgba(255,107,97,.6)}
+.dm-field-err{color:#ff8a80;font-size:13px;margin-top:-4px}
 /* toast */
 .dm-toast{position:fixed;z-index:60;left:50%;translate:-50% 0;top:calc(env(safe-area-inset-top,0px) + 66px);width:max-content;max-width:min(92vw,460px);display:flex;align-items:flex-start;gap:10px;padding:12px 14px;border-radius:18px;border:1px solid var(--l);box-shadow:0 12px 40px rgba(0,0,0,.5);font-size:14px;animation:dmToast .4s var(--ease) both}
 .dm-toast>span{flex:1;min-width:0;overflow-wrap:anywhere}.dm-toast>svg:first-child{flex:none;margin-top:1px}
@@ -2254,6 +3130,7 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",sy
   :where(.dm-app) :where(input,textarea,select){font-size:14px}
 }
 /* tablets, landscape phones and desktop: Files on the left, DevMind AI on the right, as sketched */
+@media (min-width:560px){.dm-stats{grid-template-columns:repeat(6,minmax(0,1fr))}}
 @media (min-width:700px){
   .dm-stack{flex-direction:row;gap:12px;padding:12px 16px 16px}
   .dm-files,.dm-files.open{flex:0 0 clamp(260px,34%,360px)}
